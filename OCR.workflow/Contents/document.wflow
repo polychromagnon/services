@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AMApplicationBuild</key>
+	<string>521</string>
+	<key>AMApplicationVersion</key>
+	<string>2.10</string>
+	<key>AMDocumentVersion</key>
+	<string>2</string>
+	<key>actions</key>
+	<array>
+		<dict>
+			<key>action</key>
+			<dict>
+				<key>AMAccepts</key>
+				<dict>
+					<key>Container</key>
+					<string>List</string>
+					<key>Optional</key>
+					<true/>
+					<key>Types</key>
+					<array>
+						<string>com.apple.cocoa.path</string>
+					</array>
+				</dict>
+				<key>AMActionVersion</key>
+				<string>2.0.3</string>
+				<key>AMApplication</key>
+				<array>
+					<string>Automator</string>
+				</array>
+				<key>AMParameterProperties</key>
+				<dict>
+					<key>COMMAND_STRING</key>
+					<dict/>
+					<key>CheckedForUserDefaultShell</key>
+					<dict/>
+					<key>inputMethod</key>
+					<dict/>
+					<key>shell</key>
+					<dict/>
+					<key>source</key>
+					<dict/>
+				</dict>
+				<key>AMProvides</key>
+				<dict>
+					<key>Container</key>
+					<string>List</string>
+					<key>Types</key>
+					<array>
+						<string>com.apple.cocoa.string</string>
+					</array>
+				</dict>
+				<key>ActionBundlePath</key>
+				<string>/System/Library/Automator/Run Shell Script.action</string>
+				<key>ActionName</key>
+				<string>Run Shell Script</string>
+				<key>ActionParameters</key>
+				<dict>
+					<key>COMMAND_STRING</key>
+					<string>#!/bin/bash
+# Opens ONE Terminal.app window and runs the review view on the whole
+# selection. Terminal rather than Automator's own script runner for two
+# reasons: the view's local server must outlive the action (Automator kills
+# a background process as soon as the workflow returns), and the terminal is
+# where progress and errors are readable.
+#
+# One window for the whole selection, never one per item: selecting thirty
+# PDFs in the Finder would otherwise open thirty of them.
+#
+# Absolute paths, resolved when this bundle was generated: a Quick Action
+# inherits neither an interactive shell's PATH nor its venv.
+PYTHON_BIN="/Users/michael/Developer/ocrswap/.venv/bin/python3"
+VIEW_SCRIPT="/Users/michael/Developer/ocrswap/ocrswap.py"
+
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+[ "$#" -eq 0 ] &amp;&amp; exit 0
+
+# UNE seule invocation pour toute la selection, jamais une par element.
+# Avant le 26/07/2026 les elements etaient enchaines par « ; » : trois PDF
+# selectionnes donnaient trois vues separees, et fermer la premiere
+# n'arretait pas les suivantes (« ; » enchaine quoi qu'il arrive). Les deux
+# scripts acceptent N chemins et n'en font qu'une seule liste.
+# A blank page FIRST, and it is not cosmetic. Terminal.app echoes the command
+# it was handed before running it, so the window opened on a full line of
+# quoted absolute paths. `clear` was used here until 17/08/2026 and it was not
+# enough: macOS ships an old ncurses whose `clear` sends only ESC[H ESC[2J, and
+# Terminal.app answers ESC[2J by PUSHING the screen into the scrollback rather
+# than erasing it, so the command line stayed visible above a screen of blank
+# lines until the view itself sent ESC[3J, a few seconds later (Python start
+# and imports). `printf` is a shell builtin everywhere and sends the three
+# sequences itself: home, erase screen, erase scrollback. Chained with `;`
+# rather than `&amp;&amp;`: whatever happens, the view must run.
+cmd="printf '\\033[H\\033[2J\\033[3J'; $(shell_quote "$PYTHON_BIN") $(shell_quote "$VIEW_SCRIPT")"
+for f in "$@"; do
+  cmd="$cmd $(shell_quote "$f")"
+done
+
+# Escape for embedding as an AppleScript double-quoted string literal:
+# backslashes first, then double quotes (order matters).
+as_cmd=${cmd//\\/\\\\}
+as_cmd=${as_cmd//\"/\\\"}
+osascript -e 'tell application "Terminal" to activate' \
+          -e "tell application \"Terminal\" to do script \"$as_cmd\""
+</string>
+					<key>CheckedForUserDefaultShell</key>
+					<true/>
+					<key>inputMethod</key>
+					<integer>1</integer>
+					<key>shell</key>
+					<string>/bin/bash</string>
+					<key>source</key>
+					<string></string>
+				</dict>
+				<key>BundleIdentifier</key>
+				<string>com.apple.Automator.RunShellScript</string>
+				<key>CFBundleVersion</key>
+				<string>2.0.3</string>
+				<key>CanShowSelectedItemsWhenRun</key>
+				<false/>
+				<key>CanShowWhenRun</key>
+				<true/>
+				<key>Category</key>
+				<array>
+					<string>AMCategoryUtilities</string>
+				</array>
+				<key>Class Name</key>
+				<string>RunShellScriptAction</string>
+				<key>InputUUID</key>
+				<string>47012C19-11A3-41CF-A9CC-CB7B731ECE3B</string>
+				<key>Keywords</key>
+				<array>
+					<string>Shell</string>
+					<string>Script</string>
+					<string>Command</string>
+					<string>Run</string>
+					<string>Unix</string>
+				</array>
+				<key>OutputUUID</key>
+				<string>FE259F10-06AD-4645-A983-636CA758B512</string>
+				<key>UUID</key>
+				<string>6768DBD7-2BBD-4D26-9DEE-018BBD5CCA80</string>
+				<key>UnlocalizedApplications</key>
+				<array>
+					<string>Automator</string>
+				</array>
+				<key>isViewVisible</key>
+				<true/>
+				<key>location</key>
+				<string>309.000000:253.000000</string>
+				<key>nibPath</key>
+				<string>/System/Library/Automator/Run Shell Script.action/Contents/Resources/Base.lproj/main.nib</string>
+			</dict>
+			<key>isViewVisible</key>
+			<true/>
+		</dict>
+	</array>
+	<key>connectors</key>
+	<dict/>
+	<key>workflowMetaData</key>
+	<dict>
+		<key>serviceInputTypeIdentifier</key>
+		<string>com.apple.Automator.fileSystemObject</string>
+		<key>serviceOutputTypeIdentifier</key>
+		<string>com.apple.Automator.nothing</string>
+		<key>serviceProcessesInput</key>
+		<integer>0</integer>
+		<key>workflowTypeIdentifier</key>
+		<string>com.apple.Automator.servicesMenu</string>
+	</dict>
+</dict>
+</plist>
