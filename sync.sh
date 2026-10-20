@@ -6,9 +6,10 @@
 #
 # Duplicates in ~/Library/Services are cleaned on the way:
 #   - a link into the scripts folder whose target no longer exists is removed;
+#   - a real copy (not a link) whose every file git already holds is removed, which
+#     also catches the old copy of a renamed action; nothing is lost, git keeps it;
 #   - a link of the same name pointing elsewhere is replaced;
-#   - a real copy of the same name is replaced only if git already holds every one of
-#     its files, so nothing is lost; otherwise it is left alone and reported.
+#   - a real copy of the same name that git does not hold is left alone and reported.
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -37,18 +38,22 @@ saved_in_git() {
 
 mkdir -p "$LIB"
 
-# Links left behind by a renamed or moved action.
-for dst in "$LIB"/*; do
-  [ -L "$dst" ] || continue
-  target=$(readlink "$dst")
-  case "$target" in
-    "$SCRIPTS"/*)
-      if [ ! -e "$target" ]; then
-        rm -f -- "$dst"
-        echo "Clics droits : ancien lien retiré, $(basename -- "$dst")"
-      fi
-      ;;
-  esac
+# Duplicates: links left behind by a renamed or moved action, and real copies git holds.
+for dst in "$LIB"/*.workflow; do
+  if [ -L "$dst" ]; then
+    target=$(readlink "$dst")
+    case "$target" in
+      "$SCRIPTS"/*)
+        if [ ! -e "$target" ]; then
+          rm -f -- "$dst"
+          echo "Clics droits : ancien lien retiré, $(basename -- "$dst")"
+        fi
+        ;;
+    esac
+  elif [ -d "$dst" ] && saved_in_git "$dst"; then
+    rm -rf -- "$dst"
+    echo "Clics droits : doublon retiré (git le garde), $(basename -- "$dst")"
+  fi
 done
 
 for src in "$HERE"/*.workflow; do
@@ -59,12 +64,9 @@ for src in "$HERE"/*.workflow; do
     [ "$(readlink "$dst")" = "$src" ] && continue
     rm -f -- "$dst"
   elif [ -e "$dst" ]; then
-    if ! saved_in_git "$dst"; then
-      echo "Clics droits : « $name » existe déjà dans ~/Library/Services avec un contenu que git n'a pas, il n'est pas remplacé. Demande à Claude de le comparer à scripts/services avant de le supprimer." >&2
-      problems=1
-      continue
-    fi
-    rm -rf -- "$dst"
+    echo "Clics droits : « $name » existe déjà dans ~/Library/Services avec un contenu que git n'a pas, il n'est pas remplacé. Demande à Claude de le comparer à scripts/services avant de le supprimer." >&2
+    problems=1
+    continue
   fi
   ln -s "$src" "$dst"
   echo "Clics droits : relié, $name"
