@@ -15,7 +15,6 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPTS=$(dirname "$HERE")
 LIB="$HOME/Library/Services"
 BREW=/opt/homebrew/bin/brew
-changed=0
 problems=0
 
 # The actions call these Homebrew tools by full path: install whichever is missing.
@@ -47,7 +46,6 @@ for dst in "$LIB"/*; do
       if [ ! -e "$target" ]; then
         rm -f -- "$dst"
         echo "Clics droits : ancien lien retiré, $(basename -- "$dst")"
-        changed=1
       fi
       ;;
   esac
@@ -70,11 +68,9 @@ for src in "$HERE"/*.workflow; do
   fi
   ln -s "$src" "$dst"
   echo "Clics droits : relié, $name"
-  changed=1
 done
 
-# Rebuild the Services menu now instead of waiting for macOS to notice the change.
-if [ "$changed" -eq 1 ]; then
-  /System/Library/CoreServices/pbs -flush 2>/dev/null || true
-fi
+# Rebuild the Services menu on every pass: macOS watches ~/Library/Services, not the
+# linked folders, so an Info.plist edit here (menu name, file types) shows only after this.
+/System/Library/CoreServices/pbs -flush 2>/dev/null || true
 exit "$problems"
