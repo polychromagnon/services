@@ -1,0 +1,405 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AMApplicationBuild</key>
+	<string>534</string>
+	<key>AMApplicationVersion</key>
+	<string>2.10</string>
+	<key>AMDocumentVersion</key>
+	<string>2</string>
+	<key>actions</key>
+	<array>
+		<dict>
+			<key>action</key>
+			<dict>
+				<key>AMAccepts</key>
+				<dict>
+					<key>Container</key>
+					<string>List</string>
+					<key>Optional</key>
+					<true/>
+					<key>Types</key>
+					<array>
+						<string>com.apple.cocoa.string</string>
+					</array>
+				</dict>
+				<key>AMActionVersion</key>
+				<string>2.0.3</string>
+				<key>AMApplication</key>
+				<array>
+					<string>Automator</string>
+				</array>
+				<key>AMParameterProperties</key>
+				<dict>
+					<key>COMMAND_STRING</key>
+					<dict/>
+					<key>CheckedForUserDefaultShell</key>
+					<dict/>
+					<key>inputMethod</key>
+					<dict/>
+					<key>shell</key>
+					<dict/>
+					<key>source</key>
+					<dict/>
+				</dict>
+				<key>AMProvides</key>
+				<dict>
+					<key>Container</key>
+					<string>List</string>
+					<key>Types</key>
+					<array>
+						<string>com.apple.cocoa.string</string>
+					</array>
+				</dict>
+				<key>ActionBundlePath</key>
+				<string>/System/Library/Automator/Run Shell Script.action</string>
+				<key>ActionName</key>
+				<string>Run Shell Script</string>
+				<key>ActionParameters</key>
+				<dict>
+					<key>COMMAND_STRING</key>
+					<string>#!/bin/bash
+# Called by the Finder context menu (Automator Quick Action "Créer un PDF").
+# Merges the selected PDFs and images, in selection order (Finder hands "$@" in click
+# order, checked by Michael 2026-10-20), into one PDF next to the first file, without
+# losing anything: qpdf copies PDF pages byte for byte, img2pdf embeds JPEG and PNG as
+# they are and stores other images losslessly. The result gets the oldest creation date and the oldest
+# modification date of the sources, on the file (Finder) and inside the PDF.
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+QPDF="${QPDF:-/opt/homebrew/bin/qpdf}"
+IMG2PDF="${IMG2PDF:-/opt/homebrew/bin/img2pdf}"
+
+# Messages travel as osascript arguments, never inside the AppleScript text.
+warn() {
+  osascript - "$1" &lt;&lt;'AS' &gt;/dev/null
+on run argv
+  activate
+  display dialog (item 1 of argv) buttons {"OK"} default button "OK" with icon caution with title "Créer un PDF"
+end run
+AS
+}
+fail() { warn "$1"$'\n\nAucun PDF créé.'; exit 1; }
+
+[ "$#" -eq 0 ] &amp;&amp; exit 0
+for t in "$QPDF" "$IMG2PDF"; do
+  [ -x "$t" ] || fail "$(basename "$t") est introuvable. Dans le Terminal : brew install qpdf img2pdf"
+done
+
+work=$(mktemp -d) || fail "Dossier temporaire impossible à créer."
+trap 'rm -rf "$work"' EXIT
+
+parts=()
+notes=""
+expected=0
+oldest_b=""
+oldest_m=""
+i=0
+for f in "$@"; do
+  i=$((i + 1))
+  name=$(basename "$f")
+  [ -d "$f" ] &amp;&amp; fail "« $name » est un dossier : sélectionne seulement des PDF et des images."
+  [ -r "$f" ] || fail "Lecture impossible : $name"
+
+  # stat -L: a symlink's dates are those of the file it points to.
+  m=$(stat -L -f %m -- "$f")
+  b=$(stat -L -f %B -- "$f")
+  [ -z "$b" ] || [ "$b" -le 0 ] &amp;&amp; b=$m # some volumes keep no creation date
+  { [ -z "$oldest_m" ] || [ "$m" -lt "$oldest_m" ]; } &amp;&amp; oldest_m=$m
+  { [ -z "$oldest_b" ] || [ "$b" -lt "$oldest_b" ]; } &amp;&amp; oldest_b=$b
+
+  ext=$(printf '%s' "${name##*.}" | tr '[:upper:]' '[:lower:]')
+  if [ "$ext" = "pdf" ]; then
+    n=$("$QPDF" --show-npages "$f" 2&gt;/dev/null)
+    [ -n "$n" ] || fail "« $name » n'est pas un PDF lisible, ou il est protégé par un mot de passe."
+    # A page-by-page merge keeps pages only: attached files (the XML of a Factur-X
+    # invoice...) and layers are left behind, so say it and keep the original.
+    "$QPDF" --list-attachments "$f" 2&gt;/dev/null | grep -q -v "has no embedded files" &amp;&amp;
+      notes="$notes"$'\n'"« $name » : pièces jointes (facture Factur-X ?) non reprises, garde l'original"
+    root=$("$QPDF" --show-object=trailer "$f" 2&gt;/dev/null | sed -n 's/.*\/Root \([0-9][0-9]*\) 0 R.*/\1/p')
+    [ -n "$root" ] &amp;&amp; "$QPDF" --show-object="$root" "$f" 2&gt;/dev/null | grep -q "/OCProperties" &amp;&amp;
+      notes="$notes"$'\n'"« $name » : calques, un calque masqué peut devenir visible"
+    parts+=("$f")
+  else
+    page="$work/$i.pdf"
+    # Common formats go straight to img2pdf, which embeds them as they are. Anything else
+    # (HEIC, camera RAW...) is decoded by macOS into a lossless TIFF first: Pillow would
+    # read only the small preview of a NEF or DNG, without any error.
+    src="$f"
+    case "$ext" in
+      jpg | jpeg | jpe | jfif | png | gif | tif | tiff | bmp | webp | jp2 | j2k | jpf | jpx) ;;
+      *)
+        src="$work/$i.tiff"
+        sips -s format tiff "$f" --out "$src" &gt;/dev/null 2&gt;&amp;1 ||
+          fail "« $name » n'est ni un PDF ni une image lisible."
+        ;;
+    esac
+    # An interlaced 16-bit PNG cannot be copied as is: img2pdf would decode it to 8 bits.
+    if [ "$ext" = "png" ]; then
+      read -r depth _ _ _ lace &lt;&lt;&lt;"$(od -An -tu1 -j24 -N5 "$f")"
+      [ "$depth" = "16" ] &amp;&amp; [ "$lace" = "1" ] &amp;&amp;
+        fail "« $name » est un PNG 16 bits entrelacé : img2pdf ne sait pas l'insérer sans perte."
+    fi
+    # One page per photo: the extra frames of a JPEG (depth or gain map of a phone photo)
+    # or of an animated GIF are dropped; a multipage TIFF scan keeps all its pages.
+    opt=(--first-frame-only)
+    case "$ext" in tif | tiff) opt=() ;; esac
+    # Pillow already turns a TIFF upright when it opens it: img2pdf must not turn it again.
+    rot=--rotation=ifvalid
+    case "$src" in *.tif | *.tiff | *.TIF | *.TIFF) rot=--rotation=none ;; esac
+    # --pillow-limit-break: very large scans and panoramas are legitimate input.
+    if ! "$IMG2PDF" "$rot" --pillow-limit-break "${opt[@]}" -o "$page" "$src" 2&gt;"$work/$i.err"; then
+      if grep -q -i -e "8 bits per sample" -e "&gt;8bit" "$work/$i.err"; then
+        fail "« $name » a plus de 8 bits par couleur : img2pdf ne sait pas l'insérer sans perte."
+      fi
+      # A misnamed file (a HEIC saved as .jpg...) gets a second chance through macOS.
+      if [ "$src" = "$f" ] &amp;&amp; sips -s format tiff "$f" --out "$work/$i.tiff" &gt;/dev/null 2&gt;&amp;1 &amp;&amp;
+        "$IMG2PDF" --rotation=none --pillow-limit-break "${opt[@]}" -o "$page" "$work/$i.tiff" 2&gt;"$work/$i.err"; then
+        :
+      elif grep -q -i -e "8 bits per sample" -e "&gt;8bit" "$work/$i.err"; then
+        fail "« $name » a plus de 8 bits par couleur : img2pdf ne sait pas l'insérer sans perte."
+      else
+        fail "« $name » n'est pas une image lisible ($(tail -n 1 "$work/$i.err" | cut -c1-150))."
+      fi
+    fi
+    # img2pdf cannot mirror an image: a mirrored EXIF orientation stays as stored.
+    grep -q -i "flipped" "$work/$i.err" &amp;&amp; notes="$notes"$'\n'"« $name » : orientation en miroir non appliquée"
+    n=$("$QPDF" --show-npages "$page")
+    parts+=("$page")
+  fi
+  expected=$((expected + n))
+done
+
+# Same naming as Apple: "doc1.pdf", or "doc1 2.pdf", "doc1 3.pdf"... when taken.
+dir=$(dirname "$1")
+first=$(basename "$1")
+stem="${first%.*}"
+target="$dir/$stem.pdf"
+k=2
+while [ -e "$target" ]; do target="$dir/$stem $k.pdf"; k=$((k + 1)); done
+
+# --stream-data=preserve: every stream is copied as is, never decoded nor recompressed.
+# Exit code 3 means success with warnings (a slightly damaged source qpdf could read).
+"$QPDF" --stream-data=preserve --empty --pages "${parts[@]}" -- "$work/merged.pdf" 2&gt;/dev/null
+rc=$?
+[ "$rc" -eq 0 ] || [ "$rc" -eq 3 ] || fail "L'assemblage a échoué (qpdf, code $rc)."
+
+# Internal dates: a new /Info object added through qpdf's JSON update. The trailer is
+# replaced as written, so it carries /Root and /Size too.
+pdfdate() {
+  local s
+  s=$(date -r "$1" +%Y%m%d%H%M%S%z)
+  printf "D:%s%s'%s'" "${s:0:14}" "${s:14:3}" "${s:17:2}"
+}
+trailer=$("$QPDF" --show-object=trailer "$work/merged.pdf" 2&gt;/dev/null)
+root=$(printf '%s' "$trailer" | sed -n 's/.*\/Root \([0-9][0-9]*\) 0 R.*/\1/p')
+size=$(printf '%s' "$trailer" | sed -n 's/.*\/Size \([0-9][0-9]*\).*/\1/p')
+[ -n "$root" ] &amp;&amp; [ -n "$size" ] || fail "Structure du PDF assemblé inattendue."
+cdate=$(pdfdate "$oldest_b")
+mdate=$(pdfdate "$oldest_m")
+cat &gt;"$work/info.json" &lt;&lt;EOF
+{"qpdf":[{"jsonversion":2,"pushedinheritedpageresources":false,"calledgetallpages":false,"maxobjectid":$((size - 1))},
+{"obj:$size 0 R":{"value":{"/CreationDate":"u:$cdate","/ModDate":"u:$mdate"}},
+"trailer":{"value":{"/Root":"$root 0 R","/Info":"$size 0 R","/Size":$((size + 1))}}}]}
+EOF
+"$QPDF" --stream-data=preserve "$work/merged.pdf" --update-from-json="$work/info.json" "$work/final.pdf" 2&gt;/dev/null
+rc=$?
+[ "$rc" -eq 0 ] || [ "$rc" -eq 3 ] || fail "Écriture des dates internes impossible (qpdf, code $rc)."
+
+# Never pass on a PDF that lost pages on the way.
+got=$("$QPDF" --show-npages "$work/final.pdf" 2&gt;/dev/null)
+[ "$got" = "$expected" ] || fail "Des pages se sont perdues pendant l'assemblage ($got sur $expected)."
+
+mv -n -- "$work/final.pdf" "$target" &amp;&amp; [ -e "$target" ] || fail "Écriture impossible dans $dir"
+
+# File dates: modification first, creation last, because lowering the modification date
+# below the creation date drags the creation date down with it.
+osascript -l JavaScript - "$target" "$oldest_m" "$oldest_b" &lt;&lt;'JXA' &gt;/dev/null
+function run(argv) {
+  ObjC.import('Foundation');
+  const fm = $.NSFileManager.defaultManager;
+  const at = (s) =&gt; $.NSDate.dateWithTimeIntervalSince1970(Number(s));
+  fm.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(at(argv[1]), 'NSFileModificationDate'), argv[0], null);
+  fm.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(at(argv[2]), 'NSFileCreationDate'), argv[0], null);
+}
+JXA
+
+# Read every date back: a refused change must not pass silently.
+missed=""
+[ "$(stat -L -f %B -- "$target")" = "$oldest_b" ] || missed="$missed"$'\n'"création (Finder)"
+[ "$(stat -L -f %m -- "$target")" = "$oldest_m" ] || missed="$missed"$'\n'"modification (Finder)"
+info=$("$QPDF" --show-object=trailer "$target" 2&gt;/dev/null | sed -n 's/.*\/Info \([0-9][0-9]*\) 0 R.*/\1/p')
+infodict=$([ -n "$info" ] &amp;&amp; "$QPDF" --show-object="$info" "$target" 2&gt;/dev/null)
+case "$infodict" in *"$cdate"*) ;; *) missed="$missed"$'\n'"création (interne au PDF)" ;; esac
+case "$infodict" in *"$mdate"*) ;; *) missed="$missed"$'\n'"modification (interne au PDF)" ;; esac
+msg=""
+[ -z "$missed" ] || msg="ces dates n'ont pas pu être recalées :$missed"
+if [ -n "$notes" ]; then
+  [ -z "$msg" ] || msg="$msg"$'\n\n'
+  msg="${msg}à vérifier :$notes"
+fi
+[ -z "$msg" ] || warn "« $(basename "$target") » est créé, mais $msg"
+exit 0
+</string>
+					<key>CheckedForUserDefaultShell</key>
+					<true/>
+					<key>inputMethod</key>
+					<integer>1</integer>
+					<key>shell</key>
+					<string>/bin/bash</string>
+					<key>source</key>
+					<string></string>
+				</dict>
+				<key>BundleIdentifier</key>
+				<string>com.apple.RunShellScript</string>
+				<key>CFBundleVersion</key>
+				<string>2.0.3</string>
+				<key>CanShowSelectedItemsWhenRun</key>
+				<false/>
+				<key>CanShowWhenRun</key>
+				<true/>
+				<key>Category</key>
+				<array>
+					<string>AMCategoryUtilities</string>
+				</array>
+				<key>Class Name</key>
+				<string>RunShellScriptAction</string>
+				<key>InputUUID</key>
+				<string>159B2136-1735-402C-8063-53C33E72829A</string>
+				<key>Keywords</key>
+				<array>
+					<string>Shell</string>
+					<string>Script</string>
+					<string>Command</string>
+					<string>Run</string>
+					<string>Unix</string>
+				</array>
+				<key>OutputUUID</key>
+				<string>29E6F044-3BE2-4C47-A109-AA6BA4CFA2C0</string>
+				<key>UUID</key>
+				<string>F36D20A9-7AB7-4E41-880F-4E99514CE2F8</string>
+				<key>UnlocalizedApplications</key>
+				<array>
+					<string>Automator</string>
+				</array>
+				<key>arguments</key>
+				<dict>
+					<key>0</key>
+					<dict>
+						<key>default value</key>
+						<integer>0</integer>
+						<key>name</key>
+						<string>inputMethod</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>0</string>
+					</dict>
+					<key>1</key>
+					<dict>
+						<key>default value</key>
+						<false/>
+						<key>name</key>
+						<string>CheckedForUserDefaultShell</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>1</string>
+					</dict>
+					<key>2</key>
+					<dict>
+						<key>default value</key>
+						<string></string>
+						<key>name</key>
+						<string>source</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>2</string>
+					</dict>
+					<key>3</key>
+					<dict>
+						<key>default value</key>
+						<string></string>
+						<key>name</key>
+						<string>COMMAND_STRING</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>3</string>
+					</dict>
+					<key>4</key>
+					<dict>
+						<key>default value</key>
+						<string>/bin/sh</string>
+						<key>name</key>
+						<string>shell</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>4</string>
+					</dict>
+				</dict>
+				<key>isViewVisible</key>
+				<integer>1</integer>
+				<key>location</key>
+				<string>544.000000:305.000000</string>
+				<key>nibPath</key>
+				<string>/System/Library/Automator/Run Shell Script.action/Contents/Resources/Base.lproj/main.nib</string>
+			</dict>
+			<key>isViewVisible</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>connectors</key>
+	<dict/>
+	<key>workflowMetaData</key>
+	<dict>
+		<key>applicationBundleID</key>
+		<string>com.apple.finder</string>
+		<key>applicationBundleIDsByPath</key>
+		<dict>
+			<key>/System/Library/CoreServices/Finder.app</key>
+			<string>com.apple.finder</string>
+		</dict>
+		<key>applicationPath</key>
+		<string>/System/Library/CoreServices/Finder.app</string>
+		<key>applicationPaths</key>
+		<array>
+			<string>/System/Library/CoreServices/Finder.app</string>
+		</array>
+		<key>inputTypeIdentifier</key>
+		<string>com.apple.Automator.fileSystemObject</string>
+		<key>outputTypeIdentifier</key>
+		<string>com.apple.Automator.nothing</string>
+		<key>presentationMode</key>
+		<integer>15</integer>
+		<key>processesInput</key>
+		<false/>
+		<key>serviceApplicationBundleID</key>
+		<string>com.apple.finder</string>
+		<key>serviceApplicationPath</key>
+		<string>/System/Library/CoreServices/Finder.app</string>
+		<key>serviceInputTypeIdentifier</key>
+		<string>com.apple.Automator.fileSystemObject</string>
+		<key>serviceOutputTypeIdentifier</key>
+		<string>com.apple.Automator.nothing</string>
+		<key>serviceProcessesInput</key>
+		<false/>
+		<key>useAutomaticInputType</key>
+		<false/>
+		<key>workflowTypeIdentifier</key>
+		<string>com.apple.Automator.servicesMenu</string>
+	</dict>
+</dict>
+</plist>
