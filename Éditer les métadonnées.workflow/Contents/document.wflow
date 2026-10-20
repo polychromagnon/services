@@ -67,7 +67,7 @@ METMUX="/Users/michael/Developer/metmux/metmux.py"
 
 if [ ! -f "$METMUX" ]; then
   # Messages travel as osascript arguments, never inside the AppleScript text.
-  osascript - "metmux.py est introuvable ici :" "$METMUX" "Corrige la ligne METMUX= de scripts/metmux/Éditer les métadonnées.workflow/Contents/document.wflow." &lt;&lt;'GUARD'
+  osascript - "metmux.py est introuvable ici :" "$METMUX" "Corrige la ligne METMUX= de scripts/services/Éditer les métadonnées.workflow/Contents/document.wflow." &lt;&lt;'GUARD'
 on run argv
     display dialog (item 1 of argv) &amp; return &amp; return &amp; (item 2 of argv) &amp; return &amp; return &amp; (item 3 of argv) buttons {"OK"} default button "OK" with icon caution with title "metmux"
 end run

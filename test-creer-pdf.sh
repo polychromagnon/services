@@ -3,7 +3,7 @@
 # images in a temporary folder, runs the workflow's own script on them with the same bare
 # PATH as the Finder, and prints one line per check. Nothing outside that folder is
 # touched; the action's dialogs are logged instead of shown.
-# Run: bash creer-pdf/test-mac.sh, then send back everything it prints.
+# Run: bash services/test-creer-pdf.sh, then send back everything it prints.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 WF="$HERE/Créer un PDF.workflow/Contents/document.wflow"
@@ -23,7 +23,7 @@ have() { # FILE... : true when every fixture exists, else says which one is miss
 }
 
 for t in "$QPDF" "$IMG2PDF"; do
-  [ -x "$t" ] || { echo "Manque $t : lance d'abord creer-pdf-clic-droit.sh"; exit 1; }
+  [ -x "$t" ] || { echo "Manque $t : lance d'abord maj"; exit 1; }
 done
 # img2pdf's own Python has Pillow: it draws the test pictures.
 PY=$(head -n 1 "$IMG2PDF" | sed 's/^#! *//')
