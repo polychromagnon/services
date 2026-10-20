@@ -1,7 +1,7 @@
 #!/bin/bash
 # Link every Finder Quick Action of this folder into ~/Library/Services: macOS then runs
 # the copy kept here, so an edit here applies at once and stays reviewable in git.
-# Run by maj on every pass; when everything is already linked it changes nothing.
+# Run by maj on every pass; when everything is already linked it changes no link.
 # No "menu:" header on purpose: the Shortcut launcher must never list this folder.
 #
 # Duplicates in ~/Library/Services are cleaned on the way:
