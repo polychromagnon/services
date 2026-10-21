@@ -19,6 +19,7 @@ ok() { echo "OK     $1"; okn=$((okn + 1)); }
 ko() { echo "ÉCHEC  $1"; kon=$((kon + 1)); }
 note() { echo "INFO   $1"; }
 have() { # FILE... : true when every fixture exists, else says which one is missing
+  local x
   for x in "$@"; do [ -s "$x" ] || { note "essai sauté, fichier d'essai non fabriqué : $(basename "$x")"; return 1; }; done
 }
 
@@ -90,8 +91,39 @@ pic(60, 40).save(f"{d}/portrait.tif", tiffinfo={274: 6})                  # TIFF
 pic(70, 40).save(f"{d}/miroir.jpg", exif=exif(5))                          # mirrored orientation
 pic(80, 40).save(f"{t}/heicsrc.jpg", exif=exif(6))
 Image.new("I;16", (50, 30), 30000).save(f"{d}/gris16.png")                # 16-bit PNG: kept as is
-Image.new("I;16", (50, 30), 30000).save(f"{d}/gris16.tif")                # 16-bit TIFF: refused
+Image.new("I;16", (50, 30), 30000).save(f"{d}/gris16.tif")                # 16-bit TIFF: kept or refused
+pg = [Image.new("I;16", (50, 30), v) for v in (1000, 40000)]
+pg[0].save(f"{d}/multi16.tif", save_all=True, append_images=pg[1:])       # 2 pages of 16 bits: refused
+fax = Image.new("1", (300, 200), 1)                                        # fax scan stored landscape, tag 6
+dr = ImageDraw.Draw(fax)
+dr.rectangle((10, 10, 120, 90), fill=0); dr.line((0, 0, 299, 199), fill=0); dr.ellipse((150, 40, 280, 180), outline=0)
+fax.save(f"{d}/fax.tif", compression="group4", tiffinfo={274: 6}, dpi=(200, 200))
+Image.new("1", (14000, 13000), 1).save(f"{d}/geant.png")                  # 182 Mpx, above Pillow's limit
+# Interlaced 16-bit color PNG (img2pdf would cut it to 8 bits without a word), written by hand: Pillow cannot write interlaced PNG.
+import struct, zlib
+def chunk(k, b): return struct.pack(">I", len(b)) + k + b + struct.pack(">I", zlib.crc32(k + b) & 0xffffffff)
+def adam7(w, h, px):  # px(x, y) -> pixel bytes; returns the interlaced scanlines
+    out = b""
+    for x0, y0, dx, dy in ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)):
+        for y in range(y0, h, dy):
+            row = b"".join(px(x, y) for x in range(x0, w, dx))
+            if row:
+                out += b"\x00" + row
+    return out
+lace = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 16, 16, 16, 2, 0, 0, 1))
+        + chunk(b"IDAT", zlib.compress(adam7(16, 16, lambda x, y: struct.pack(">HHH", x * 4000 + y, y * 4000 + x, 30000 + x * y))))
+        + chunk(b"IEND", b""))
+open(f"{d}/entrelace16.png", "wb").write(lace)
+open(f"{d}/entrelace16-bis.jpg", "wb").write(lace)                        # same file, misnamed
 PYEOF
+cp "$IN/portrait.tif" "$IN/portrait2.Tiff"                                  # odd case extension
+# PDFs written by hand, then rebuilt by qpdf: one with a layer, one with a signature field.
+pdfraw() { # FILE CATALOG_EXTRA PAGE_EXTRA OBJ4
+  printf '%%PDF-1.5\n1 0 obj<</Type/Catalog/Pages 2 0 R%s>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]%s>>endobj\n4 0 obj%s endobj\ntrailer<</Root 1 0 R/Size 5>>\n%%%%EOF\n' "$2" "$3" "$4" >"$T/raw.pdf"
+  "$QPDF" "$T/raw.pdf" "$1" 2>/dev/null
+}
+pdfraw "$IN/calques.pdf" "/OCProperties<</OCGs[4 0 R]/D<</Order[4 0 R]/OFF[4 0 R]>>>>" "" "<</Type/OCG/Name(Calque)>>"
+pdfraw "$IN/signe.pdf" "/AcroForm<</Fields[4 0 R]/SigFlags 3>>" "/Annots[4 0 R]" "<</Type/Annot/Subtype/Widget/FT/Sig/T(Signature1)/Rect[0 0 50 20]/P 3 0 R>>"
 "$IMG2PDF" -o "$IN/Facture d'été.pdf" "$T/p1.png" "$T/p2.png" 2>/dev/null # 2 pages
 "$IMG2PDF" -o "$T/b0.pdf" "$T/p3.png" 2>/dev/null
 "$QPDF" --object-streams=generate "$T/b0.pdf" "$IN/b.pdf"                  # 1 page, object streams
@@ -100,13 +132,25 @@ sips -s format heic "$T/heicsrc.jpg" --out "$IN/iphone.heic" >/dev/null 2>&1
 "$QPDF" --encrypt secret secret 256 -- "$IN/b.pdf" "$IN/verrou.pdf"
 printf '<?xml version="1.0"?><Invoice/>' >"$T/factur-x.xml"
 "$QPDF" --add-attachment "$T/factur-x.xml" -- "$IN/b.pdf" "$IN/facture.pdf"
+cp "$IN/b.pdf" "$IN/b-sans-extension"                                       # a PDF without .pdf
 
 # Dates as in the request: the first file at 11:05, the others at 11:06, one older creation.
 for f in "$IN"/*; do touch -t 202510041106 "$f"; done
 touch -t 202510041105 "$IN/Facture d'été.pdf"
 touch -t 202001011200 "$IN/alpha.png" && touch -t 202510041107 "$IN/alpha.png"
+# A copied file: created after its last modification (birth 2025-06-01, modified 2024-01-01).
+cp "$IN/b.pdf" "$IN/copie.pdf"
+/usr/bin/osascript -l JavaScript - "$IN/copie.pdf" 1704106800 1748772000 <<'JXA' >/dev/null 2>&1
+function run(argv) {
+  ObjC.import('Foundation');
+  const fm = $.NSFileManager.defaultManager;
+  const at = (s) => $.NSDate.dateWithTimeIntervalSince1970(Number(s));
+  fm.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(at(argv[1]), 'NSFileModificationDate'), argv[0], null);
+  fm.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(at(argv[2]), 'NSFileCreationDate'), argv[0], null);
+}
+JXA
 ls "$IN" >"$T/names"
-sums() { while IFS= read -r n; do printf '%s %s\n' "$(cksum <"$IN/$n")" "$n"; done <"$T/names"; }
+sums() { while IFS= read -r n; do printf '%s %s %s %s\n' "$(cksum <"$IN/$n")" "$(stat -f %m "$IN/$n")" "$(stat -f %B "$IN/$n")" "$n"; done <"$T/names"; }
 before=$(sums)
 
 # --- Case 1: the full mix, accented first name ------------------------------------------------
@@ -154,8 +198,10 @@ if have "$IN/Facture d'été.pdf" "$IN/photo.jpg" "$IN/b.pdf" "$IN/scan.tif" "$I
       ko "date de création $(fmt "$(stat -f %B "$out")") au lieu de $(fmt "$minb")"
     info=$("$QPDF" --show-object=trailer "$out" | sed -n 's/.*\/Info \([0-9][0-9]*\) 0 R.*/\1/p')
     idict=$("$QPDF" --show-object="$info" "$out" 2>/dev/null)
-    case "$idict" in *"D:$(date -r "$minb" +%Y%m%d%H%M%S)"*) ok "date de création interne au PDF" ;; *) ko "date de création interne : $idict" ;; esac
-    case "$idict" in *"D:$(date -r "$minm" +%Y%m%d%H%M%S)"*) ok "date de modification interne au PDF" ;; *) ko "date de modification interne : $idict" ;; esac
+    # Expected dates computed by Python, time zone included, not by the action's own formula.
+    pdfd() { "$PY" -c "import datetime,sys; s=datetime.datetime.fromtimestamp(int(sys.argv[1])).astimezone().strftime('%Y%m%d%H%M%S%z'); print('D:'+s[:17]+chr(39)+s[17:]+chr(39))" "$1"; }
+    case "$idict" in *"$(pdfd "$minb")"*) ok "date de création interne au PDF, fuseau compris ($(pdfd "$minb"))" ;; *) ko "date de création interne : $idict" ;; esac
+    case "$idict" in *"$(pdfd "$minm")"*) ok "date de modification interne au PDF, fuseau compris" ;; *) ko "date de modification interne : $idict" ;; esac
     [ -s "$T/mix.log" ] && ko "message affiché : $(said mix)" || ok "aucun message d'alerte"
     "$QPDF" --check "$out" >/dev/null 2>&1 && ok "qpdf --check : PDF sain" || ko "qpdf --check signale un problème"
   else
@@ -179,6 +225,43 @@ if have "$IN/portrait.tif"; then
   [ -f "$IN/portrait.pdf" ] && [ "$(upright "$IN/portrait.pdf")" = portrait ] && ok "TIFF en portrait affiché droit" ||
     ko "TIFF en portrait affiché couché ou absent ; message : $(said tif)"
 fi
+if have "$IN/portrait2.Tiff"; then
+  run tif2 "$IN/portrait2.Tiff"
+  [ -f "$IN/portrait2.pdf" ] && [ "$(upright "$IN/portrait2.pdf")" = portrait ] && ok "TIFF nommé .Tiff : affiché droit aussi" ||
+    ko "TIFF nommé .Tiff affiché couché ou absent ; message : $(said tif2)"
+fi
+# A fax scan is copied without decoding: decode the page back and compare it, pixel by pixel,
+# with the scan as an image viewer shows it.
+if have "$IN/fax.tif"; then
+  run fax "$IN/fax.tif"
+  k=$(pages "$IN/fax.pdf" 2>/dev/null | awk 'NR==1{print $2}')
+  if [ -n "$k" ]; then
+    "$QPDF" --show-object="$k" --raw-stream-data "$IN/fax.pdf" >"$T/fax.bin"
+    "$QPDF" --show-object="$k" "$IN/fax.pdf" >"$T/fax.dict"
+    diffpx=$("$PY" - "$IN/fax.tif" "$T/fax.bin" "$T/fax.dict" <<'PYEOF'
+import io, re, struct, sys
+from PIL import Image, ImageOps
+src, raw, dic = sys.argv[1], open(sys.argv[2], "rb").read(), open(sys.argv[3]).read()
+if "CCITTFaxDecode" not in dic:
+    print("flux non CCITT"); sys.exit()
+w = int(re.search(r"/Columns (\d+)", dic).group(1)); h = int(re.search(r"/Rows (\d+)", dic).group(1))
+black1 = "/BlackIs1 true" in dic
+tags = [(256, 4, 1, w), (257, 4, 1, h), (258, 3, 1, 1), (259, 3, 1, 4), (262, 3, 1, 1 if black1 else 0),
+        (273, 4, 1, 8 + 2 + 12 * 8 + 4), (278, 4, 1, h), (279, 4, 1, len(raw))]
+ifd = struct.pack("<H", len(tags)) + b"".join(struct.pack("<HHII", *t) for t in tags) + struct.pack("<I", 0)
+got = Image.open(io.BytesIO(b"II*\x00\x08\x00\x00\x00" + ifd + raw)).convert("L")
+want = ImageOps.exif_transpose(Image.open(src)).convert("L")
+if got.size != want.size:
+    print("taille %sx%s au lieu de %sx%s" % (got.size + want.size)); sys.exit()
+print(sum(a != b for a, b in zip(got.tobytes(), want.tobytes())))
+PYEOF
+)
+    [ "$diffpx" = 0 ] && [ "$(upright "$IN/fax.pdf")" = portrait ] && ok "scan fax en portrait : redressé, identique pixel pour pixel" ||
+      ko "scan fax en portrait : $diffpx pixels différents ou page couchée ; message : $(said fax)"
+  else
+    ko "scan fax en portrait : aucun PDF ; message : $(said fax)"
+  fi
+fi
 if [ -s "$IN/iphone.heic" ]; then
   o=""
   [ -x "$EXIFTOOL" ] && o=$("$EXIFTOOL" -s3 -n -Orientation "$IN/iphone.heic" 2>/dev/null)
@@ -200,10 +283,41 @@ if have "$IN/miroir.jpg"; then
 fi
 
 # --- Case 5: refusals -------------------------------------------------------------------------
+# A 16-bit TIFF either keeps its 16 bits (macOS rewrites it as a 16-bit PNG) or is refused:
+# a PDF with fewer bits would be a silent loss.
 if have "$IN/gris16.tif"; then
   run deep "$IN/gris16.tif" "$IN/b.pdf"
-  [ ! -e "$IN/gris16.pdf" ] && grep -q "8 bits" "$T/deep.log" && ok "TIFF 16 bits refusé avec un message, aucun PDF" ||
-    ko "TIFF 16 bits : $(said deep)"
+  k=$(pages "$IN/gris16.pdf" 2>/dev/null | awk 'NR==1{print $2}')
+  if [ -n "$k" ]; then
+    "$QPDF" --show-object="$k" "$IN/gris16.pdf" | grep -q "/BitsPerComponent 16" && ok "TIFF 16 bits gardé en 16 bits" ||
+      ko "TIFF 16 bits réduit en silence : $("$QPDF" --show-object="$k" "$IN/gris16.pdf" | grep -o '/BitsPerComponent [0-9]*')"
+  else
+    grep -q "8 bits" "$T/deep.log" && ok "TIFF 16 bits refusé avec un message, aucun PDF (macOS ne l'a pas gardé en 16 bits)" ||
+      ko "TIFF 16 bits : $(said deep)"
+  fi
+fi
+if have "$IN/multi16.tif"; then
+  run multi16 "$IN/multi16.tif"
+  [ ! -e "$IN/multi16.pdf" ] && grep -q "8 bits" "$T/multi16.log" && ok "TIFF 16 bits de 2 pages refusé avec un message, aucun PDF" ||
+    ko "TIFF 16 bits de 2 pages : $(said multi16)"
+fi
+for x in entrelace16.png entrelace16-bis.jpg; do
+  if have "$IN/$x"; then
+    run lace "$IN/$x"
+    k=$(pages "$IN/${x%.*}.pdf" 2>/dev/null | awk 'NR==1{print $2}')
+    if [ -n "$k" ]; then
+      "$QPDF" --show-object="$k" "$IN/${x%.*}.pdf" | grep -q "/BitsPerComponent 16" && ok "PNG 16 bits entrelacé ($x) gardé en 16 bits" ||
+        ko "PNG 16 bits entrelacé ($x) réduit en silence"
+    else
+      grep -q "entrelacé" "$T/lace.log" && ok "PNG 16 bits entrelacé ($x) refusé avec un message (macOS ne l'a pas gardé en 16 bits)" ||
+        ko "PNG 16 bits entrelacé ($x) : $(said lace)"
+    fi
+  fi
+done
+if have "$IN/geant.png"; then
+  run big "$IN/geant.png"
+  [ "$("$QPDF" --show-npages "$IN/geant.pdf" 2>/dev/null)" = 1 ] && ok "image géante (182 millions de pixels) acceptée" ||
+    ko "image géante : $(said big)"
 fi
 if have "$IN/gris16.png"; then
   run png16 "$IN/gris16.png"
@@ -220,9 +334,41 @@ run attach "$IN/facture.pdf" "$IN/b.pdf"
 [ -f "$IN/facture 2.pdf" ] && grep -q "Factur-X" "$T/attach.log" && ok "pièce jointe : PDF créé et alerte « garde l'original »" ||
   ko "pièce jointe : $(said attach)"
 
+# --- Case 7: layers, signature, PDF without extension, file created after its modification ------
+if have "$IN/calques.pdf"; then
+  run layers "$IN/calques.pdf" "$IN/b.pdf"
+  [ -f "$IN/calques 2.pdf" ] && grep -q "calques" "$T/layers.log" && ok "calques : PDF créé et alerte" || ko "calques : $(said layers)"
+fi
+if have "$IN/signe.pdf"; then
+  run sig "$IN/signe.pdf" "$IN/b.pdf"
+  [ -f "$IN/signe 2.pdf" ] && grep -q "signature" "$T/sig.log" && ok "signature électronique : PDF créé et alerte" || ko "signature : $(said sig)"
+fi
+run noext "$IN/b-sans-extension"
+[ "$("$QPDF" --show-npages "$IN/b-sans-extension.pdf" 2>/dev/null)" = 1 ] && ok "PDF sans extension .pdf : repris comme PDF" ||
+  ko "PDF sans extension : $(said noext)"
+cb=$(stat -f %B "$IN/copie.pdf")
+cm=$(stat -f %m "$IN/copie.pdf")
+if [ "$cb" -gt "$cm" ]; then
+  run copied "$IN/copie.pdf"
+  [ "$(stat -f %B "$IN/copie 2.pdf" 2>/dev/null)" = "$cb" ] && [ "$(stat -f %m "$IN/copie 2.pdf")" = "$cm" ] && [ ! -s "$T/copied.log" ] &&
+    ok "fichier copié (créé après sa modification) : ses deux dates reprises telles quelles" ||
+    ko "fichier copié : création $(stat -f %B "$IN/copie 2.pdf" 2>/dev/null) au lieu de $cb, modification $(stat -f %m "$IN/copie 2.pdf" 2>/dev/null) au lieu de $cm ; message : $(said copied)"
+else
+  note "essai du fichier copié sauté : macOS n'a pas gardé une création postérieure à la modification"
+fi
+
+# --- The real alert dialog compiles (it is only logged above) ----------------------------------
+if [ -x /usr/bin/osacompile ]; then
+  sed -n "/<<'AS'/,/^AS\$/p" "$T/run.sh" | sed '1d;$d' >"$T/warn.applescript"
+  [ -s "$T/warn.applescript" ] && /usr/bin/osacompile -o "$T/warn.scpt" "$T/warn.applescript" 2>"$T/osa.err" &&
+    ok "message d'alerte : AppleScript valide" || ko "message d'alerte : AppleScript invalide ($(cat "$T/osa.err"))"
+else
+  note "osacompile absent : AppleScript du message non vérifié"
+fi
+
 # --- Originals untouched ------------------------------------------------------------------------
 [ "$(sums)" = "$before" ] &&
-  ok "fichiers d'origine inchangés" || ko "un fichier d'origine a changé"
+  ok "fichiers d'origine inchangés, dates comprises" || ko "un fichier d'origine a changé"
 
 echo
 echo "Bilan : $okn OK, $kon ÉCHEC"

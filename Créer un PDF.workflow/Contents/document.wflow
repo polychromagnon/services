@@ -85,6 +85,24 @@ fail() { warn "$1"$'\n\nAucun PDF créé.'; exit 1; }
 for t in "$QPDF" "$IMG2PDF"; do
   [ -x "$t" ] || fail "$(basename "$t") est introuvable. Dans le Terminal : brew install qpdf img2pdf"
 done
+# img2pdf's own Python (from its first line) also runs the Pillow snippet below.
+PY=$(sed -n '1s/^#! *//p' "$IMG2PDF")
+[ -x "$PY" ] || fail "Python d'img2pdf introuvable ($PY). Dans le Terminal : brew reinstall img2pdf"
+# First bytes as hex: the content says what a file is, whatever its name.
+magic() { od -An -tx1 -N4 "$1" | tr -d ' \n'; }
+deep() { grep -q -i -e "8 bits per sample" -e "&gt;8bit" "$work/$i.err"; }
+# More than 8 bits per color: macOS can write the image as a 16-bit PNG, which img2pdf
+# embeds as is. Kept only when nothing is lost: one page, source at most 16 bits, PNG
+# really 16 bits and not interlaced.
+png16() {
+  [ "$frames" = 1 ] || return 1
+  bits=$(sips -g bitsPerSample "$1" 2&gt;/dev/null | awk '/bitsPerSample/ {print $2}')
+  [ -n "$bits" ] &amp;&amp; [ "$bits" -le 16 ] || return 1
+  sips -s format png "$1" --out "$work/$i.png" &gt;/dev/null 2&gt;&amp;1 || return 1
+  read -r d _ _ _ l &lt;&lt;&lt;"$(od -An -tu1 -j24 -N5 "$work/$i.png")"
+  [ "$d" = 16 ] &amp;&amp; [ "$l" = 0 ] || return 1
+  "$IMG2PDF" --rotation=ifvalid --pillow-limit-break -o "$page" "$work/$i.png" 2&gt;"$work/$i.err"
+}
 
 work=$(mktemp -d) || fail "Dossier temporaire impossible à créer."
 trap 'rm -rf "$work"' EXIT
@@ -109,7 +127,7 @@ for f in "$@"; do
   { [ -z "$oldest_b" ] || [ "$b" -lt "$oldest_b" ]; } &amp;&amp; oldest_b=$b
 
   ext=$(printf '%s' "${name##*.}" | tr '[:upper:]' '[:lower:]')
-  if [ "$ext" = "pdf" ]; then
+  if [ "$ext" = "pdf" ] || [ "$(magic "$f")" = 25504446 ]; then
     n=$("$QPDF" --show-npages "$f" 2&gt;/dev/null)
     [ -n "$n" ] || fail "« $name » n'est pas un PDF lisible, ou il est protégé par un mot de passe."
     # A page-by-page merge keeps pages only: attached files (the XML of a Factur-X
@@ -119,6 +137,8 @@ for f in "$@"; do
     root=$("$QPDF" --show-object=trailer "$f" 2&gt;/dev/null | sed -n 's/.*\/Root \([0-9][0-9]*\) 0 R.*/\1/p')
     [ -n "$root" ] &amp;&amp; "$QPDF" --show-object="$root" "$f" 2&gt;/dev/null | grep -q "/OCProperties" &amp;&amp;
       notes="$notes"$'\n'"« $name » : calques, un calque masqué peut devenir visible"
+    "$QPDF" --json --json-key=acroform "$f" 2&gt;/dev/null | grep -q '"fieldtype": "/Sig"' &amp;&amp;
+      notes="$notes"$'\n'"« $name » : signature électronique, elle ne vaut plus dans le PDF assemblé, garde l'original"
     parts+=("$f")
   else
     page="$work/$i.pdf"
@@ -134,30 +154,77 @@ for f in "$@"; do
           fail "« $name » n'est ni un PDF ni une image lisible."
         ;;
     esac
-    # An interlaced 16-bit PNG cannot be copied as is: img2pdf would decode it to 8 bits.
-    if [ "$ext" = "png" ]; then
+    # An interlaced 16-bit PNG cannot be copied as is: img2pdf would decode it to 8 bits
+    # without a word. It goes through the 16-bit PNG rewrite instead.
+    frames=1
+    if [ "$(magic "$f")" = 89504e47 ]; then
       read -r depth _ _ _ lace &lt;&lt;&lt;"$(od -An -tu1 -j24 -N5 "$f")"
-      [ "$depth" = "16" ] &amp;&amp; [ "$lace" = "1" ] &amp;&amp;
-        fail "« $name » est un PNG 16 bits entrelacé : img2pdf ne sait pas l'insérer sans perte."
+      if [ "$depth" = "16" ] &amp;&amp; [ "$lace" = "1" ]; then
+        png16 "$f" || fail "« $name » est un PNG 16 bits entrelacé : impossible de l'insérer sans perte."
+        n=$("$QPDF" --show-npages "$page")
+        parts+=("$page")
+        expected=$((expected + n))
+        continue
+      fi
     fi
     # One page per photo: the extra frames of a JPEG (depth or gain map of a phone photo)
     # or of an animated GIF are dropped; a multipage TIFF scan keeps all its pages.
-    opt=(--first-frame-only)
-    case "$ext" in tif | tiff) opt=() ;; esac
     # Pillow already turns a TIFF upright when it opens it: img2pdf must not turn it again.
+    opt=(--first-frame-only)
     rot=--rotation=ifvalid
-    case "$src" in *.tif | *.tiff | *.TIF | *.TIFF) rot=--rotation=none ;; esac
+    case "$(magic "$src")" in
+      49492a00 | 4d4d002a)
+        opt=()
+        rot=--rotation=none
+        # A fax-compressed (CCITT) black and white scan is copied by img2pdf without
+        # decoding, so Pillow's turn would scramble it: such a scan, when its orientation
+        # is not upright, is turned here and stored again as a lossless fax TIFF.
+        frames=$("$PY" -I - "$src" "$work/$i-up.tiff" &lt;&lt;'PY' 2&gt;"$work/$i.err"
+import sys
+from PIL import Image
+src, out = sys.argv[1], sys.argv[2]
+try:
+    im = Image.open(src)
+    n = getattr(im, "n_frames", 1)
+    fax, turned = True, False
+    for k in range(n):
+        im.seek(k)
+        fax = fax and im.mode == "1" and im.info.get("compression") in ("group3", "group4", "tiff_ccitt")
+        turned = turned or im.tag_v2.get(274, 1) != 1
+except Exception:
+    print(0)
+    sys.exit(0)
+if fax and turned:
+    pages = []
+    for k in range(n):
+        im.seek(k)
+        im.load()
+        pages.append(im.copy())
+    dpi = im.info.get("dpi")
+    extra = {"dpi": dpi} if dpi else {}
+    pages[0].save(out, compression="group4", save_all=True, append_images=pages[1:], **extra)
+    print(n, "turned")
+else:
+    print(n)
+PY
+)
+        case "$frames" in
+          *turned) src="$work/$i-up.tiff" frames=${frames% turned} ;;
+          "") fail "« $name » : scan TIFF impossible à redresser ($(tail -n 1 "$work/$i.err" | cut -c1-150))." ;;
+        esac
+        ;;
+    esac
     # --pillow-limit-break: very large scans and panoramas are legitimate input.
     if ! "$IMG2PDF" "$rot" --pillow-limit-break "${opt[@]}" -o "$page" "$src" 2&gt;"$work/$i.err"; then
-      if grep -q -i -e "8 bits per sample" -e "&gt;8bit" "$work/$i.err"; then
-        fail "« $name » a plus de 8 bits par couleur : img2pdf ne sait pas l'insérer sans perte."
-      fi
+      if deep; then
+        png16 "$src" || fail "« $name » a plus de 8 bits par couleur : impossible de l'insérer sans perte."
       # A misnamed file (a HEIC saved as .jpg...) gets a second chance through macOS.
-      if [ "$src" = "$f" ] &amp;&amp; sips -s format tiff "$f" --out "$work/$i.tiff" &gt;/dev/null 2&gt;&amp;1 &amp;&amp;
+      elif [ "$src" = "$f" ] &amp;&amp; sips -s format tiff "$f" --out "$work/$i.tiff" &gt;/dev/null 2&gt;&amp;1 &amp;&amp;
         "$IMG2PDF" --rotation=none --pillow-limit-break "${opt[@]}" -o "$page" "$work/$i.tiff" 2&gt;"$work/$i.err"; then
         :
-      elif grep -q -i -e "8 bits per sample" -e "&gt;8bit" "$work/$i.err"; then
-        fail "« $name » a plus de 8 bits par couleur : img2pdf ne sait pas l'insérer sans perte."
+      elif deep; then
+        frames=1
+        png16 "$work/$i.tiff" || fail "« $name » a plus de 8 bits par couleur : impossible de l'insérer sans perte."
       else
         fail "« $name » n'est pas une image lisible ($(tail -n 1 "$work/$i.err" | cut -c1-150))."
       fi
