@@ -92,16 +92,11 @@ PY=$(sed -n '1s/^#! *//p' "$IMG2PDF")
 magic() { od -An -tx1 -N4 "$1" | tr -d ' \n'; }
 deep() { grep -q -i -e "8 bits per sample" -e "&gt;8bit" "$work/$i.err"; }
 # More than 8 bits per color: macOS can write the image as a 16-bit PNG, which img2pdf
-# embeds as is. Kept only when nothing is lost: one page, source at most 16 bits, PNG
-# really 16 bits and not interlaced.
+# embeds as is. Kept only when nothing is lost: a one-page image stored upright (what sips
+# does with other pages or an orientation is not known for sure), and a PNG really 16 bits
+# and not interlaced.
 png16() {
-  [ "$frames" = 1 ] || return 1
-  # Whether sips turns the pixels, keeps the orientation tag or drops it is not known for
-  # sure: an image above 8 bits that is not stored upright is refused rather than risked.
-  o=$("$PY" -I -c 'import sys; from PIL import Image; Image.MAX_IMAGE_PIXELS = None; print(Image.open(sys.argv[1]).getexif().get(274, 1))' "$1" 2&gt;/dev/null)
-  [ "$o" = 1 ] || return 1
-  bits=$(sips -g bitsPerSample "$1" 2&gt;/dev/null | awk '/bitsPerSample/ {print $2}')
-  [ -n "$bits" ] &amp;&amp; [ "$bits" -le 16 ] || return 1
+  [ "$("$PY" -I -c 'import sys; from PIL import Image; im = Image.open(sys.argv[1]); print(getattr(im, "n_frames", 1), im.getexif().get(274, 1))' "$1" 2&gt;/dev/null)" = "1 1" ] || return 1
   sips -s format png "$1" --out "$work/$i.png" &gt;/dev/null 2&gt;&amp;1 || return 1
   read -r d _ _ _ l &lt;&lt;&lt;"$(od -An -tu1 -j24 -N5 "$work/$i.png")"
   [ "$d" = 16 ] &amp;&amp; [ "$l" = 0 ] || return 1
@@ -167,108 +162,36 @@ for f in "$@"; do
           fail "« $name » n'est ni un PDF ni une image lisible."
         ;;
     esac
-    # An interlaced 16-bit PNG cannot be copied as is: img2pdf would decode it to 8 bits
-    # without a word. It goes through the 16-bit PNG rewrite instead.
-    frames=1
-    if [ "$(magic "$f")" = 89504e47 ]; then
-      read -r depth _ _ _ lace &lt;&lt;&lt;"$(od -An -tu1 -j24 -N5 "$f")"
-      if [ "$depth" = "16" ] &amp;&amp; [ "$lace" = "1" ]; then
-        png16 "$f" || fail "« $name » est un PNG 16 bits entrelacé : impossible de l'insérer sans perte."
-        n=$("$QPDF" --show-npages "$page")
-        parts+=("$page")
-        expected=$((expected + n))
-        continue
-      fi
-    fi
     # One page per photo: the extra frames of a JPEG (depth or gain map of a phone photo)
     # or of an animated GIF are dropped; a multipage TIFF scan keeps all its pages.
     # Pillow already turns a TIFF upright when it opens it: img2pdf must not turn it again.
     opt=(--first-frame-only)
     rot=--rotation=ifvalid
-    srcs=()
     case "$(magic "$src")" in
       89504e47 | 47494638)
-        # img2pdf writes the transparency mask of a small-palette PNG or GIF on 8 bits but
-        # declares it with the palette's depth, which blanks the page, and drops the
-        # transparent color of a 1-bit image: such an image is first expanded to RGBA,
-        # which keeps every pixel, its resolution and its orientation.
+        # img2pdf writes the transparency mask of a small-palette PNG or GIF (a logo, an
+        # icon) on 8 bits but declares it with the palette's depth, which blanks the page:
+        # such an image is first expanded to RGBA, which keeps every pixel, its resolution
+        # and its orientation.
         if "$PY" -I - "$src" "$work/$i-rgba.png" &lt;&lt;'PY' 2&gt;"$work/$i.err"; then
 import sys
 from PIL import Image
-Image.MAX_IMAGE_PIXELS = None  # very large scans are legitimate input, as for img2pdf
 im = Image.open(sys.argv[1])
 if im.mode not in ("P", "1", "L") or "transparency" not in im.info:
     sys.exit(1)
-# Pillow scales a 2 or 4-bit gray PNG up to 8 bits but leaves its transparent value as
-# stored: scaled here too, or no pixel would match it.
-head = open(sys.argv[1], "rb").read(26)
-if im.mode == "L" and head[:4] == b"\x89PNG" and head[24] in (2, 4):
-    im.info["transparency"] *= 255 // (2 ** head[24] - 1)
 keep = {k: im.info[k] for k in ("dpi", "exif") if im.info.get(k)}
 im.convert("RGBA").save(sys.argv[2], **keep)
 PY
           src="$work/$i-rgba.png"
         fi
         ;;
-      49492a00 | 4d4d002a | 49492b00 | 4d4d002b) # TIFF, then BigTIFF
+      49492a00 | 4d4d002a)
         opt=()
         rot=--rotation=none
-        # Two kinds of turned TIFF page are turned here, one page per file, losslessly:
-        # a fax-compressed (CCITT) one, which img2pdf copies undecoded so that Pillow's
-        # turn would scramble it, and one turned a quarter with a different x and y
-        # resolution, which img2pdf would size unswapped. Pages above 8 bits are left to
-        # the 16-bit route below.
-        frames=$("$PY" -I - "$src" "$work/$i-up" &lt;&lt;'PY' 2&gt;"$work/$i.err"
-import sys
-import io
-from PIL import Image
-Image.MAX_IMAGE_PIXELS = None  # very large scans are legitimate input, as for img2pdf
-src, out = sys.argv[1], sys.argv[2]
-try:
-    # Read from memory: from a path, Pillow maps an uncompressed TIFF page with its turned
-    # size and scrambles it; img2pdf reads from memory too.
-    im = Image.open(io.BytesIO(open(src, "rb").read()))
-    n = getattr(im, "n_frames", 1)
-    pages = []
-    for k in range(n):
-        im.seek(k)
-        fax = im.mode == "1" and im.info.get("compression") in ("group3", "group4", "tiff_ccitt")
-        bits = im.tag_v2.get(258, (8,))
-        bits = max(bits) if isinstance(bits, tuple) else bits
-        # Pillow reports (1, 1) for a scan with no resolution: left out, so img2pdf
-        # uses its 96 dpi default as for any other TIFF.
-        dpi = im.info.get("dpi")
-        dpi = tuple(dpi) if dpi and tuple(dpi) != (1, 1) else None
-        pages.append((fax, im.tag_v2.get(274, 1), bits, dpi))
-except Exception:
-    print(0)
-    sys.exit(0)
-quarter = (5, 6, 7, 8)
-need = any((fax and o != 1) or (o in quarter and dpi and dpi[0] != dpi[1]) for fax, o, bits, dpi in pages)
-if not need or any(bits &gt; 8 for fax, o, bits, dpi in pages):
-    print(n)
-    sys.exit(0)
-for k, (fax, o, bits, dpi) in enumerate(pages):
-    im.seek(k)
-    im.load()
-    extra = {"dpi": dpi[::-1] if o in quarter else dpi} if dpi else {}
-    im.copy().save("%s-%05d.tiff" % (out, k), compression="group4" if fax else "tiff_adobe_deflate", **extra)
-print(n, "turned")
-PY
-)
-        case "$frames" in
-          *turned)
-            srcs=("$work/$i-up-"*.tiff)
-            src=${srcs[0]}
-            frames=${frames% turned}
-            ;;
-          "") fail "« $name » : scan TIFF impossible à redresser ($(tail -n 1 "$work/$i.err" | cut -c1-150))." ;;
-        esac
         ;;
     esac
-    [ ${#srcs[@]} -eq 0 ] &amp;&amp; srcs=("$src")
     # --pillow-limit-break: very large scans and panoramas are legitimate input.
-    if ! "$IMG2PDF" "$rot" --pillow-limit-break "${opt[@]}" -o "$page" "${srcs[@]}" 2&gt;"$work/$i.err"; then
+    if ! "$IMG2PDF" "$rot" --pillow-limit-break "${opt[@]}" -o "$page" "$src" 2&gt;"$work/$i.err"; then
       if deep; then
         png16 "$src" || fail "« $name » a plus de 8 bits par couleur : impossible de l'insérer sans perte."
       # A misnamed file (a HEIC saved as .jpg...) gets a second chance through macOS.
@@ -276,7 +199,6 @@ PY
         "$IMG2PDF" --rotation=none --pillow-limit-break "${opt[@]}" -o "$page" "$work/$i.tiff" 2&gt;"$work/$i.err"; then
         :
       elif deep; then
-        frames=1
         png16 "$work/$i.tiff" || fail "« $name » a plus de 8 bits par couleur : impossible de l'insérer sans perte."
       else
         fail "« $name » n'est pas une image lisible ($(tail -n 1 "$work/$i.err" | cut -c1-150))."

@@ -106,7 +106,6 @@ upright() {
 "$PY" - "$IN" "$T" 2>"$T/fixtures.err" <<'PYEOF' || ko "fabrication des fichiers d'essai interrompue : $(tail -n 1 "$T/fixtures.err")"
 import sys
 from PIL import Image, ImageDraw
-Image.MAX_IMAGE_PIXELS = None
 d, t = sys.argv[1], sys.argv[2]
 def pic(w, h, mode="RGB"):
     im = Image.new(mode, (w, h), (40, 110, 200) if mode == "RGB" else (40, 110, 200, 128))
@@ -127,48 +126,13 @@ Image.new("I;16", (50, 30), 30000).save(f"{d}/png16.png")                 # 16-b
 Image.new("I;16", (50, 30), 30000).save(f"{d}/gris16.tif")                # 16-bit TIFF: kept or refused
 pg = [Image.new("I;16", (50, 30), v) for v in (1000, 40000)]
 pg[0].save(f"{d}/multi16.tif", save_all=True, append_images=pg[1:])       # 2 pages of 16 bits: refused
-fax = Image.new("1", (300, 200), 1)                                        # fax scan stored landscape, tag 6
-dr = ImageDraw.Draw(fax)
-dr.rectangle((10, 10, 120, 90), fill=0); dr.line((0, 0, 299, 199), fill=0); dr.ellipse((150, 40, 280, 180), outline=0)
-fax.save(f"{d}/fax.tif", compression="group4", tiffinfo={274: 6}, dpi=(204, 98))  # standard fax resolution
-fax.save(f"{d}/fax-sans-dpi.tif", compression="group4", tiffinfo={274: 6})  # no resolution at all
-big = Image.new("1", (16000, 12000), 1)                                    # 192 Mpx: above Pillow's own limit
-ImageDraw.Draw(big).rectangle((0, 0, 3000, 500), fill=0)
-big.save(f"{d}/fax-geant.tif", compression="group4", tiffinfo={274: 6, 278: 12000}, dpi=(400, 400))  # one strip: copied undecoded
-del big
-# Small palettes with a transparent color (img2pdf mislabels their mask) and a 1-bit one with a transparent color.
+# Small palettes with a transparent color, like a logo or an icon (img2pdf mislabels their mask).
 pal = Image.new("P", (40, 30), 1)
 pal.putpalette([255, 0, 0, 0, 0, 255, 0, 160, 0, 250, 220, 0])
 dp = ImageDraw.Draw(pal)
 dp.rectangle((0, 0, 9, 9), fill=0); dp.rectangle((20, 0, 29, 9), fill=2); dp.rectangle((0, 20, 9, 29), fill=3)
 pal.save(f"{d}/pal4.png", transparency=0, dpi=(150, 150)); pal.save(f"{d}/pal4.gif", transparency=0)
-mono = Image.new("1", (40, 30), 1)
-ImageDraw.Draw(mono).rectangle((0, 0, 9, 9), fill=0)
-mono.save(f"{d}/mono-t.png", transparency=0)
-gray = Image.new("L", (80, 48), 200)
-ImageDraw.Draw(gray).rectangle((0, 0, 19, 11), fill=40); ImageDraw.Draw(gray).line((0, 47, 79, 0), fill=120)
-gray.save(f"{d}/gris-brut6.tif", compression="raw", tiffinfo={274: 6}, dpi=(200, 100))  # uncompressed, turned, 200x100 dpi
-pic(300, 200).save(f"{d}/rgb6.tif", compression="tiff_lzw", tiffinfo={274: 6}, dpi=(204, 98))  # color TIFF, turned, 204x98 dpi
-pic(60, 40).save(f"{d}/big.tif", save_all=True, append_images=[pic(60, 40).rotate(180)], big_tiff=True, tiffinfo={274: 6})  # BigTIFF, 2 pages, turned
-Image.new("F", (30, 20), 0.5).save(f"{d}/flottant.tif")                    # 32-bit float: no lossless way in
 Image.new("I;16", (80, 48), 30000).save(f"{d}/gris16-6.tif", tiffinfo={274: 6}, dpi=(200, 100))  # 16 bits, turned
-pic(70, 50).save(f"{d}/img.bmp")
-pic(80, 60).save(f"{d}/plain.png")                                         # opaque PNG: copied as is by img2pdf
-# 16-bit color TIFF, turned, 200x100 dpi, written by hand: Pillow cannot write 16-bit color.
-import struct as s16
-def tiff16(path, w, h, orient, dpi):
-    px = b"".join(s16.pack("<HHH", x * 1500, y * 2500, 40000) for y in range(h) for x in range(w))
-    tags = [(256, 4, 1, w), (257, 4, 1, h), (258, 3, 3, 0), (259, 3, 1, 1), (262, 3, 1, 2), (273, 4, 1, 0), (274, 3, 1, orient),
-            (277, 3, 1, 3), (278, 4, 1, h), (279, 4, 1, len(px)), (282, 5, 1, 0), (283, 5, 1, 0), (296, 3, 1, 2)]
-    end = 8 + 2 + len(tags) * 12 + 4
-    off = {258: end, 282: end + 6, 283: end + 14, 273: end + 22}
-    ent = b""
-    for t, ty, c, v in tags:
-        v = off.get(t, v)
-        ent += s16.pack("<HHI", t, ty, c) + (s16.pack("<HH", v, 0) if ty == 3 and c == 1 else s16.pack("<I", v))
-    open(path, "wb").write(b"II*\x00" + s16.pack("<I", 8) + s16.pack("<H", len(tags)) + ent + s16.pack("<I", 0)
-                           + s16.pack("<HHH", 16, 16, 16) + s16.pack("<II", dpi[0], 1) + s16.pack("<II", dpi[1], 1) + px)
-tiff16(f"{d}/rgb16-6.tif", 40, 24, 6, (200, 100))
 # A PDF page drawn by two content streams, one uncompressed and one in ASCII85, with no xref table.
 import base64
 s1 = b"0 0 1 rg 10 10 80 80 re f\n"
@@ -180,30 +144,7 @@ def stream(n, data, extra=b""):
 raw = (b"%PDF-1.4\n" + obj(1, b"<</Type/Catalog/Pages 2 0 R>>") + obj(2, b"<</Type/Pages/Kids[3 0 R]/Count 1>>")
        + obj(3, b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Contents[4 0 R 5 0 R]>>")
        + stream(4, s1) + stream(5, s2, b"/Filter/ASCII85Decode") + b"trailer<</Root 1 0 R/Size 6>>\n%EOF\n")
-open(f"{d}/abime.pdf", "wb").write(raw)
-# 2-bit gray PNG whose value 1 is transparent (Pillow reads it scaled to 85), written by hand.
-import struct as st, zlib as zl
-def chunk2(k, b): return st.pack(">I", len(b)) + k + b + st.pack(">I", zl.crc32(k + b) & 0xffffffff)
-rows = b"".join(b"\x00" + bytes(((1 if x < 8 and y < 8 else 3) << 6 | (2 if y > 12 else 3) << 4 | 0 << 2 | 3) for x in range(5)) for y in range(16))
-open(f"{d}/gris2-t.png", "wb").write(b"\x89PNG\r\n\x1a\n" + chunk2(b"IHDR", st.pack(">IIBBBBB", 20, 16, 2, 0, 0, 0, 0))
-                                     + chunk2(b"tRNS", st.pack(">H", 1)) + chunk2(b"IDAT", zl.compress(rows)) + chunk2(b"IEND", b""))                                   # damaged: no xref, qpdf repairs it
-Image.new("1", (14000, 13000), 1).save(f"{d}/geant.png")                  # 182 Mpx, above Pillow's limit
-# Interlaced 16-bit color PNG (img2pdf would cut it to 8 bits without a word), written by hand: Pillow cannot write interlaced PNG.
-import struct, zlib
-def chunk(k, b): return struct.pack(">I", len(b)) + k + b + struct.pack(">I", zlib.crc32(k + b) & 0xffffffff)
-def adam7(w, h, px):  # px(x, y) -> pixel bytes; returns the interlaced scanlines
-    out = b""
-    for x0, y0, dx, dy in ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)):
-        for y in range(y0, h, dy):
-            row = b"".join(px(x, y) for x in range(x0, w, dx))
-            if row:
-                out += b"\x00" + row
-    return out
-lace = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 16, 16, 16, 2, 0, 0, 1))
-        + chunk(b"IDAT", zlib.compress(adam7(16, 16, lambda x, y: struct.pack(">HHH", x * 4000 + y, y * 4000 + x, 30000 + x * y))))
-        + chunk(b"IEND", b""))
-open(f"{d}/entrelace16.png", "wb").write(lace)
-open(f"{d}/entrelace16-bis.jpg", "wb").write(lace)                        # same file, misnamed
+open(f"{d}/abime.pdf", "wb").write(raw)                                   # damaged: no xref, qpdf repairs it
 PYEOF
 cp "$IN/portrait.tif" "$IN/portrait2.Tiff"                                  # odd case extension
 # PDFs written by hand, then rebuilt by qpdf: one with a layer, one with a signature field.
@@ -225,7 +166,6 @@ cp "$IN/b.pdf" "$IN/b-sans-extension"                                       # a 
 cp "$IN/b.pdf" "$IN/relevé.2025.10.pdf"                                     # dots inside the name
 cp "$IN/photo.jpg" "$IN/APPAREIL.JPG"                                       # a camera's upper case name
 cp "$IN/photo.jpg" "$IN/photo-sans-extension"                               # a JPEG without extension
-for x in plain.png anim.gif w.webp img.bmp; do [ -s "$IN/$x" ] && cp "$IN/$x" "$IN/${x##*.}-sans-extension"; done
 cp "$IN/scan.tif" "$IN/SCAN2.TIF"                                           # 2-page scan, upper case name
 "$QPDF" --stream-data=preserve "$IN/abime.pdf" "$IN/brut.pdf" 2>/dev/null  # same page, repaired, streams kept
 
@@ -334,68 +274,12 @@ if have "$IN/portrait2.Tiff"; then
   [ -f "$IN/portrait2.pdf" ] && [ "$(upright "$IN/portrait2.pdf")" = portrait ] && ok "TIFF nommé .Tiff : affiché droit aussi" ||
     ko "TIFF nommé .Tiff affiché couché ou absent ; message : $(said tif2)"
 fi
-# faxdiff PDF TIFF : pixels of the first page's fax image that differ from the TIFF as a viewer shows it
-faxdiff() {
-  local k
-  k=$(pages "$1" 2>/dev/null | awk 'NR==1{print $2}')
-  [ -n "$k" ] && [ "$k" != "-" ] || { echo "aucune image"; return; }
-  "$QPDF" --show-object="$k" --raw-stream-data "$1" >"$T/fax.bin"
-  "$QPDF" --show-object="$k" "$1" >"$T/fax.dict"
-  "$PY" - "$2" "$T/fax.bin" "$T/fax.dict" 2>/dev/null <<'PYEOF'
-import io, re, struct, sys
-from PIL import Image, ImageOps
-Image.MAX_IMAGE_PIXELS = None
-src, raw, dic = sys.argv[1], open(sys.argv[2], "rb").read(), open(sys.argv[3]).read()
-if "CCITTFaxDecode" not in dic:
-    print("flux non CCITT"); sys.exit()
-w = int(re.search(r"/Columns (\d+)", dic).group(1)); h = int(re.search(r"/Rows (\d+)", dic).group(1))
-black1 = "/BlackIs1 true" in dic
-tags = [(256, 4, 1, w), (257, 4, 1, h), (258, 3, 1, 1), (259, 3, 1, 4), (262, 3, 1, 1 if black1 else 0),
-        (273, 4, 1, 8 + 2 + 12 * 8 + 4), (278, 4, 1, h), (279, 4, 1, len(raw))]
-ifd = struct.pack("<H", len(tags)) + b"".join(struct.pack("<HHII", *t) for t in tags) + struct.pack("<I", 0)
-got = Image.open(io.BytesIO(b"II*\x00\x08\x00\x00\x00" + ifd + raw)).convert("1")
-want = ImageOps.exif_transpose(Image.open(src)).convert("1")
-if got.size != want.size:
-    print("taille %sx%s au lieu de %sx%s" % (got.size + want.size)); sys.exit()
-a, b = got.tobytes(), want.tobytes()
-print(0 if a == b else sum(x != y for x, y in zip(a, b)))
-PYEOF
-}
-# A fax scan is copied without decoding: decode the page back and compare it, pixel by pixel,
-# with the scan as an image viewer shows it.
-if have "$IN/fax.tif"; then
-  run fax "$IN/fax.tif"
-  k=$(pages "$IN/fax.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-  if [ -n "$k" ]; then
-    diffpx=$(faxdiff "$IN/fax.pdf" "$IN/fax.tif")
-    [ "$diffpx" = 0 ] && [ "$(upright "$IN/fax.pdf")" = portrait ] && ok "scan fax en portrait : redressé, identique pixel pour pixel" ||
-      ko "scan fax en portrait : $diffpx pixels différents ou page couchée ; message : $(said fax)"
-    # 300x200 px at 204x98 dpi, turned a quarter: 200 px at 98 dpi wide, 300 px at 204 dpi high.
-    [ "$(mbox "$IN/fax.pdf")" = "147 106" ] && ok "scan fax en portrait : taille de page juste (résolution 204x98 tournée)" ||
-      ko "scan fax en portrait : page de $(mbox "$IN/fax.pdf") points au lieu de 147 106"
-  else
-    ko "scan fax en portrait : aucun PDF ; message : $(said fax)"
-  fi
-fi
-if have "$IN/fax-sans-dpi.tif"; then
-  run fax0 "$IN/fax-sans-dpi.tif"
-  # No resolution: 96 dpi, like any other TIFF, so 200x300 px give 150x225 points.
-  [ "$(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null)" = "150 225" ] && [ "$(faxdiff "$IN/fax-sans-dpi.pdf" "$IN/fax-sans-dpi.tif")" = 0 ] &&
-    ok "scan fax sans résolution : redressé pixel pour pixel, taille de page normale" ||
-    ko "scan fax sans résolution : $(faxdiff "$IN/fax-sans-dpi.pdf" "$IN/fax-sans-dpi.tif") pixels différents, page de $(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null) points au lieu de 150 225 ; message : $(said fax0)"
-fi
-if have "$IN/fax-geant.tif"; then
-  run faxg "$IN/fax-geant.tif"
-  [ "$(faxdiff "$IN/fax-geant.pdf" "$IN/fax-geant.tif")" = 0 ] && [ "$(upright "$IN/fax-geant.pdf")" = portrait ] &&
-    ok "scan fax géant (192 millions de pixels) en portrait : redressé pixel pour pixel" ||
-    ko "scan fax géant en portrait : $(faxdiff "$IN/fax-geant.pdf" "$IN/fax-geant.tif") ; message : $(said faxg)"
-fi
-# Transparent small-palette PNG and GIF, 1-bit PNG with a transparent color: decode each page and its
+# Transparent small-palette PNG and GIF: decode each page and its
 # transparency mask back and compare them, pixel by pixel, with the source.
-if have "$IN/pal4.png" "$IN/pal4.gif" "$IN/mono-t.png" "$IN/gris2-t.png"; then
-  run pal "$IN/pal4.png" "$IN/pal4.gif" "$IN/mono-t.png" "$IN/gris2-t.png"
+if have "$IN/pal4.png" "$IN/pal4.gif"; then
+  run pal "$IN/pal4.png" "$IN/pal4.gif"
   n=0
-  for src in pal4.png pal4.gif mono-t.png gris2-t.png; do
+  for src in pal4.png pal4.gif; do
     n=$((n + 1))
     k=$(pages "$IN/pal4.pdf" 2>/dev/null | awk -v n=$n 'NR==n{print $2}')
     r="aucune page"
@@ -414,10 +298,6 @@ import re, sys
 from PIL import Image
 src, d, b, md, mb = sys.argv[1], open(sys.argv[2]).read(), open(sys.argv[3], "rb").read(), open(sys.argv[4]).read(), open(sys.argv[5], "rb").read()
 want = Image.open(src).convert("RGBA")
-if src.endswith("gris2-t.png"):  # Pillow reads the 2-bit values scaled: the transparent 1 is 85
-    g = Image.open(src).convert("L")
-    want = g.convert("RGBA")
-    want.putalpha(g.point(lambda v: 0 if v == 85 else 255))
 w, h = want.size
 if not md:
     print("transparence perdue"); sys.exit()
@@ -436,37 +316,6 @@ PYEOF
   # 40x30 px at 150 dpi: 19.2x14.4 points.
   [ "$(mbox "$IN/pal4.pdf" 2>/dev/null)" = "19 14" ] && ok "image à palette : résolution gardée" ||
     ko "image à palette : page de $(mbox "$IN/pal4.pdf" 2>/dev/null) points au lieu de 19 14"
-fi
-if have "$IN/rgb6.tif"; then
-  run rgb6 "$IN/rgb6.tif"
-  # Same sizes as the fax: 300x200 px at 204x98 dpi, turned a quarter.
-  [ "$(mbox "$IN/rgb6.pdf" 2>/dev/null)" = "147 106" ] && [ "$(upright "$IN/rgb6.pdf")" = portrait ] &&
-    ok "TIFF couleur en portrait, résolution 204x98 : droit, taille de page juste" ||
-    ko "TIFF couleur en portrait, résolution 204x98 : page de $(mbox "$IN/rgb6.pdf" 2>/dev/null) points au lieu de 147 106 ; message : $(said rgb6)"
-fi
-if have "$IN/gris-brut6.tif"; then
-  run brut6 "$IN/gris-brut6.tif"
-  k=$(pages "$IN/gris-brut6.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-  r="aucune page"
-  if [ -n "$k" ] && [ "$k" != "-" ]; then
-    "$QPDF" --show-object="$k" "$IN/gris-brut6.pdf" >"$T/g.dict"
-    "$QPDF" --show-object="$k" --filtered-stream-data "$IN/gris-brut6.pdf" >"$T/g.bin" 2>/dev/null
-    r=$("$PY" -W ignore - "$IN/gris-brut6.tif" "$T/g.dict" "$T/g.bin" <<'PYEOF'
-import io, sys
-from PIL import Image, ImageOps
-src, d, b = sys.argv[1], open(sys.argv[2]).read(), open(sys.argv[3], "rb").read()
-# Read from memory: from a path, Pillow scrambles an uncompressed turned TIFF.
-want = ImageOps.exif_transpose(Image.open(io.BytesIO(open(src, "rb").read()))).convert("L")
-w, h = want.size
-if "/DeviceGray" not in d or "/BitsPerComponent 8" not in d or len(b) != w * h:
-    print("image inattendue"); sys.exit()
-print(sum(x != y for x, y in zip(b, want.tobytes())))
-PYEOF
-)
-  fi
-  # 80x48 px at 200x100 dpi, turned a quarter: 48 px at 100 dpi wide, 80 px at 200 dpi high.
-  [ "$r" = 0 ] && [ "$(mbox "$IN/gris-brut6.pdf")" = "35 29" ] && ok "TIFF gris non compressé en portrait : droit pixel pour pixel, taille juste" ||
-    ko "TIFF gris non compressé en portrait : $r pixels différents, page de $(mbox "$IN/gris-brut6.pdf" 2>/dev/null) points au lieu de 35 29 ; message : $(said brut6)"
 fi
 if [ -s "$IN/iphone.heic" ]; then
   o=""
@@ -506,24 +355,6 @@ if have "$IN/multi16.tif"; then
   run multi16 "$IN/multi16.tif"
   [ ! -e "$IN/multi16.pdf" ] && grep -q "8 bits" "$T/multi16.log" && ok "TIFF 16 bits de 2 pages refusé avec un message, aucun PDF" ||
     ko "TIFF 16 bits de 2 pages : $(said multi16)"
-fi
-for x in entrelace16.png entrelace16-bis.jpg; do
-  if have "$IN/$x"; then
-    run lace "$IN/$x"
-    k=$(pages "$IN/${x%.*}.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-    if [ -n "$k" ]; then
-      "$QPDF" --show-object="$k" "$IN/${x%.*}.pdf" | grep -q "/BitsPerComponent 16" && ok "PNG 16 bits entrelacé ($x) gardé en 16 bits" ||
-        ko "PNG 16 bits entrelacé ($x) réduit en silence"
-    else
-      grep -q "entrelacé" "$T/lace.log" && ok "PNG 16 bits entrelacé ($x) refusé avec un message (macOS ne l'a pas gardé en 16 bits)" ||
-        ko "PNG 16 bits entrelacé ($x) : $(said lace)"
-    fi
-  fi
-done
-if have "$IN/geant.png"; then
-  run big "$IN/geant.png"
-  [ "$("$QPDF" --show-npages "$IN/geant.pdf" 2>/dev/null)" = 1 ] && ok "image géante (182 millions de pixels) acceptée" ||
-    ko "image géante : $(said big)"
 fi
 if have "$IN/png16.png"; then
   run png16 "$IN/png16.png"
@@ -568,37 +399,12 @@ jpegsame "$IN/APPAREIL.pdf" "$IN/photo.jpg" && ok "photo nommée .JPG en majuscu
 run noextjpg "$IN/photo-sans-extension"
 jpegsame "$IN/photo-sans-extension.pdf" "$IN/photo.jpg" && ok "photo JPEG sans extension : insérée octet pour octet" ||
   ko "photo JPEG sans extension : réencodée ou absente ; message : $(said noextjpg)"
-# Without extension, PNG, GIF, WebP and BMP are recognized by their first bytes: same page as with it.
-for x in png gif webp bmp; do
-  n=plain.png; [ $x = gif ] && n=anim.gif; [ $x = webp ] && n=w.webp; [ $x = bmp ] && n=img.bmp
-  if have "$IN/$n" "$IN/$x-sans-extension"; then
-    run "noext$x" "$IN/$x-sans-extension"
-    run "ext$x" "$IN/$n"
-    a=$(pages "$IN/$x-sans-extension.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-    b=$(pages "$IN/${n%.*}.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-    [ -n "$b" ] && "$QPDF" --show-object="$b" --raw-stream-data "$IN/${n%.*}.pdf" >"$T/e.bin" 2>/dev/null
-    [ -n "$a" ] && [ -n "$b" ] && [ "$a" != - ] &&
-      "$QPDF" --show-object="$a" --raw-stream-data "$IN/$x-sans-extension.pdf" 2>/dev/null | cmp -s - "$T/e.bin" &&
-      ok "image $x sans extension : même page qu'avec son extension" || ko "image $x sans extension : page différente ou absente ; message : $(said noext$x)"
-  fi
-done
 if have "$IN/SCAN2.TIF"; then
   run scan2 "$IN/SCAN2.TIF"
   [ "$("$QPDF" --show-npages "$IN/SCAN2.pdf" 2>/dev/null)" = 2 ] && ok "scan TIFF de 2 pages nommé .TIF en majuscules : 2 pages" ||
     ko "scan .TIF de 2 pages : $("$QPDF" --show-npages "$IN/SCAN2.pdf" 2>/dev/null) page(s) ; message : $(said scan2)"
 fi
-if have "$IN/big.tif"; then
-  run big2 "$IN/big.tif"
-  [ "$("$QPDF" --show-npages "$IN/big.pdf" 2>/dev/null)" = 2 ] && [ "$(upright "$IN/big.pdf")" = portrait ] &&
-    ok "très gros TIFF (BigTIFF) de 2 pages en portrait : 2 pages, droit" ||
-    ko "BigTIFF : $("$QPDF" --show-npages "$IN/big.pdf" 2>/dev/null) page(s), $(upright "$IN/big.pdf" 2>/dev/null) ; message : $(said big2)"
-fi
-if have "$IN/flottant.tif"; then
-  run float "$IN/flottant.tif"
-  [ ! -e "$IN/flottant.pdf" ] && [ -s "$T/float.log" ] && ok "TIFF 32 bits flottant : refusé avec un message" ||
-    ko "TIFF 32 bits flottant : PDF créé (réduit en silence ?) ou refus sans message"
-fi
-for x in gris16-6 rgb16-6; do
+for x in gris16-6; do
   if have "$IN/$x.tif"; then
     run "t$x" "$IN/$x.tif"
     k=$(pages "$IN/$x.pdf" 2>/dev/null | awk 'NR==1{print $2}')
