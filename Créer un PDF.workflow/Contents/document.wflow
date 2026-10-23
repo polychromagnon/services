@@ -98,8 +98,8 @@ png16() {
   [ "$frames" = 1 ] || return 1
   # Whether sips turns the pixels, keeps the orientation tag or drops it is not known for
   # sure: an image above 8 bits that is not stored upright is refused rather than risked.
-  o=$("$PY" -I -c 'import sys; from PIL import Image; print(Image.open(sys.argv[1]).getexif().get(274, 1))' "$1" 2&gt;/dev/null)
-  [ "${o:-1}" = 1 ] || return 1
+  o=$("$PY" -I -c 'import sys; from PIL import Image; Image.MAX_IMAGE_PIXELS = None; print(Image.open(sys.argv[1]).getexif().get(274, 1))' "$1" 2&gt;/dev/null)
+  [ "$o" = 1 ] || return 1
   bits=$(sips -g bitsPerSample "$1" 2&gt;/dev/null | awk '/bitsPerSample/ {print $2}')
   [ -n "$bits" ] &amp;&amp; [ "$bits" -le 16 ] || return 1
   sips -s format png "$1" --out "$work/$i.png" &gt;/dev/null 2&gt;&amp;1 || return 1
@@ -195,6 +195,7 @@ for f in "$@"; do
         if "$PY" -I - "$src" "$work/$i-rgba.png" &lt;&lt;'PY' 2&gt;"$work/$i.err"; then
 import sys
 from PIL import Image
+Image.MAX_IMAGE_PIXELS = None  # very large scans are legitimate input, as for img2pdf
 im = Image.open(sys.argv[1])
 if im.mode not in ("P", "1", "L") or "transparency" not in im.info:
     sys.exit(1)
@@ -221,6 +222,7 @@ PY
 import sys
 import io
 from PIL import Image
+Image.MAX_IMAGE_PIXELS = None  # very large scans are legitimate input, as for img2pdf
 src, out = sys.argv[1], sys.argv[2]
 try:
     # Read from memory: from a path, Pillow maps an uncompressed TIFF page with its turned

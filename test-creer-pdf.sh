@@ -12,7 +12,7 @@ IMG2PDF=/opt/homebrew/bin/img2pdf
 EXIFTOOL=/opt/homebrew/bin/exiftool
 T=$(mktemp -d)
 IN="$T/in"
-mkdir -p "$IN" "$T/bin"
+mkdir -p "$IN" "$T/bin" "$T/tmp"
 okn=0
 kon=0
 ok() { echo "OK     $1"; okn=$((okn + 1)); }
@@ -49,7 +49,9 @@ run() {
   shift
   : >"$log"
   # The Finder hands a Quick Action no locale: the Terminal's is removed too.
-  env -u LANG -u LC_ALL -u LC_CTYPE DIALOGS="$log" PATH="$T/bin:${FINDER_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" /bin/bash "$T/run.sh" "$@"
+  # XQPDF=FILE run ... : the action uses that qpdf instead. TMPDIR is checked empty at the end.
+  env -u LANG -u LC_ALL -u LC_CTYPE ${XQPDF:+"QPDF=$XQPDF"} TMPDIR="$T/tmp" DIALOGS="$log" \
+    PATH="$T/bin:${FINDER_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" /bin/bash "$T/run.sh" "$@"
   echo $? >"${log%.log}.rc"
 }
 said() { tr '\n' ' ' <"$T/$1.log"; }
@@ -104,6 +106,7 @@ upright() {
 "$PY" - "$IN" "$T" 2>"$T/fixtures.err" <<'PYEOF' || ko "fabrication des fichiers d'essai interrompue : $(tail -n 1 "$T/fixtures.err")"
 import sys
 from PIL import Image, ImageDraw
+Image.MAX_IMAGE_PIXELS = None
 d, t = sys.argv[1], sys.argv[2]
 def pic(w, h, mode="RGB"):
     im = Image.new(mode, (w, h), (40, 110, 200) if mode == "RGB" else (40, 110, 200, 128))
@@ -129,6 +132,10 @@ dr = ImageDraw.Draw(fax)
 dr.rectangle((10, 10, 120, 90), fill=0); dr.line((0, 0, 299, 199), fill=0); dr.ellipse((150, 40, 280, 180), outline=0)
 fax.save(f"{d}/fax.tif", compression="group4", tiffinfo={274: 6}, dpi=(204, 98))  # standard fax resolution
 fax.save(f"{d}/fax-sans-dpi.tif", compression="group4", tiffinfo={274: 6})  # no resolution at all
+big = Image.new("1", (16000, 12000), 1)                                    # 192 Mpx: above Pillow's own limit
+ImageDraw.Draw(big).rectangle((0, 0, 3000, 500), fill=0)
+big.save(f"{d}/fax-geant.tif", compression="group4", tiffinfo={274: 6, 278: 12000}, dpi=(400, 400))  # one strip: copied undecoded
+del big
 # Small palettes with a transparent color (img2pdf mislabels their mask) and a 1-bit one with a transparent color.
 pal = Image.new("P", (40, 30), 1)
 pal.putpalette([255, 0, 0, 0, 0, 255, 0, 160, 0, 250, 220, 0])
@@ -337,6 +344,7 @@ faxdiff() {
   "$PY" - "$2" "$T/fax.bin" "$T/fax.dict" 2>/dev/null <<'PYEOF'
 import io, re, struct, sys
 from PIL import Image, ImageOps
+Image.MAX_IMAGE_PIXELS = None
 src, raw, dic = sys.argv[1], open(sys.argv[2], "rb").read(), open(sys.argv[3]).read()
 if "CCITTFaxDecode" not in dic:
     print("flux non CCITT"); sys.exit()
@@ -345,11 +353,12 @@ black1 = "/BlackIs1 true" in dic
 tags = [(256, 4, 1, w), (257, 4, 1, h), (258, 3, 1, 1), (259, 3, 1, 4), (262, 3, 1, 1 if black1 else 0),
         (273, 4, 1, 8 + 2 + 12 * 8 + 4), (278, 4, 1, h), (279, 4, 1, len(raw))]
 ifd = struct.pack("<H", len(tags)) + b"".join(struct.pack("<HHII", *t) for t in tags) + struct.pack("<I", 0)
-got = Image.open(io.BytesIO(b"II*\x00\x08\x00\x00\x00" + ifd + raw)).convert("L")
-want = ImageOps.exif_transpose(Image.open(src)).convert("L")
+got = Image.open(io.BytesIO(b"II*\x00\x08\x00\x00\x00" + ifd + raw)).convert("1")
+want = ImageOps.exif_transpose(Image.open(src)).convert("1")
 if got.size != want.size:
     print("taille %sx%s au lieu de %sx%s" % (got.size + want.size)); sys.exit()
-print(sum(a != b for a, b in zip(got.tobytes(), want.tobytes())))
+a, b = got.tobytes(), want.tobytes()
+print(0 if a == b else sum(x != y for x, y in zip(a, b)))
 PYEOF
 }
 # A fax scan is copied without decoding: decode the page back and compare it, pixel by pixel,
@@ -374,6 +383,12 @@ if have "$IN/fax-sans-dpi.tif"; then
   [ "$(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null)" = "150 225" ] && [ "$(faxdiff "$IN/fax-sans-dpi.pdf" "$IN/fax-sans-dpi.tif")" = 0 ] &&
     ok "scan fax sans résolution : redressé pixel pour pixel, taille de page normale" ||
     ko "scan fax sans résolution : $(faxdiff "$IN/fax-sans-dpi.pdf" "$IN/fax-sans-dpi.tif") pixels différents, page de $(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null) points au lieu de 150 225 ; message : $(said fax0)"
+fi
+if have "$IN/fax-geant.tif"; then
+  run faxg "$IN/fax-geant.tif"
+  [ "$(faxdiff "$IN/fax-geant.pdf" "$IN/fax-geant.tif")" = 0 ] && [ "$(upright "$IN/fax-geant.pdf")" = portrait ] &&
+    ok "scan fax géant (192 millions de pixels) en portrait : redressé pixel pour pixel" ||
+    ko "scan fax géant en portrait : $(faxdiff "$IN/fax-geant.pdf" "$IN/fax-geant.tif") ; message : $(said faxg)"
 fi
 # Transparent small-palette PNG and GIF, 1-bit PNG with a transparent color: decode each page and its
 # transparency mask back and compare them, pixel by pixel, with the source.
@@ -621,6 +636,29 @@ if [ -x /usr/bin/osacompile ]; then
 else
   note "osacompile absent : essai de l'AppleScript du message sauté"
 fi
+
+# --- Guards against a lost page and a double run --------------------------------------------------
+# A qpdf that loses one page on the way: the action must refuse, never deliver a shorter PDF.
+cat >"$T/bin/qpdf-perte" <<QPDFEOF
+#!/bin/bash
+if [ "\$1" = --show-npages ] && [ "\${2##*/}" = final.pdf ]; then echo \$((\$("$QPDF" --show-npages "\$2") - 1)); exit 0; fi
+exec "$QPDF" "\$@"
+QPDFEOF
+chmod +x "$T/bin/qpdf-perte"
+mkdir -p "$T/perte" && cp "$IN/Facture d'été.pdf" "$T/perte/a.pdf"
+XQPDF="$T/bin/qpdf-perte" run lost "$T/perte/a.pdf"
+[ ! -e "$T/perte/a 2.pdf" ] && grep -q "pages se sont perdues" "$T/lost.log" && ok "page perdue en route : refusé avec un message, aucun PDF" ||
+  ko "page perdue en route : $(ls "$T/perte" | tr '\n' ' ') ; message : $(said lost)"
+# The same selection run twice at once: two PDFs, or one PDF and a message, never one silently overwritten.
+mkdir -p "$T/double" && cp "$IN/Facture d'été.pdf" "$T/double/d.pdf" && cp "$IN/b.pdf" "$T/double/e.pdf"
+run twice1 "$T/double/d.pdf" "$T/double/e.pdf" &
+run twice2 "$T/double/d.pdf" "$T/double/e.pdf"
+wait
+made=$(ls "$T/double" | grep -c '^d [0-9]*\.pdf$')
+twice=$(cat "$T/twice1.log" "$T/twice2.log" | grep -c "deux fois")
+[ $((made + twice)) -eq 2 ] && ok "action lancée deux fois en même temps : $made PDF, rien d'écrasé" ||
+  ko "action lancée deux fois en même temps : $made PDF et $twice message(s) pour 2 lancements"
+[ -z "$(ls -A "$T/tmp")" ] && ok "dossiers temporaires de l'action supprimés" || ko "dossiers temporaires laissés : $(ls "$T/tmp" | tr '\n' ' ')"
 
 # --- Originals untouched ------------------------------------------------------------------------
 [ "$(sums)" = "$before" ] &&
