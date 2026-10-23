@@ -191,6 +191,11 @@ from PIL import Image
 im = Image.open(sys.argv[1])
 if im.mode not in ("P", "1", "L") or "transparency" not in im.info:
     sys.exit(1)
+# Pillow scales a 2 or 4-bit gray PNG up to 8 bits but leaves its transparent value as
+# stored: scaled here too, or no pixel would match it.
+head = open(sys.argv[1], "rb").read(26)
+if im.mode == "L" and head[:4] == b"\x89PNG" and head[24] in (2, 4):
+    im.info["transparency"] *= 255 // (2 ** head[24] - 1)
 keep = {k: im.info[k] for k in ("dpi", "exif") if im.info.get(k)}
 im.convert("RGBA").save(sys.argv[2], **keep)
 PY
@@ -207,10 +212,13 @@ PY
         # the 16-bit route below.
         frames=$("$PY" -I - "$src" "$work/$i-up" &lt;&lt;'PY' 2&gt;"$work/$i.err"
 import sys
+import io
 from PIL import Image
 src, out = sys.argv[1], sys.argv[2]
 try:
-    im = Image.open(src)
+    # Read from memory: from a path, Pillow maps an uncompressed TIFF page with its turned
+    # size and scrambles it; img2pdf reads from memory too.
+    im = Image.open(io.BytesIO(open(src, "rb").read()))
     n = getattr(im, "n_frames", 1)
     pages = []
     for k in range(n):
@@ -333,8 +341,8 @@ missed=""
 [ "$(stat -L -f %m -- "$target")" = "$oldest_m" ] || missed="$missed"$'\n'"modification (Finder)"
 info=$("$QPDF" --show-object=trailer "$target" 2&gt;/dev/null | sed -n 's/.*\/Info \([0-9][0-9]*\) 0 R.*/\1/p')
 infodict=$([ -n "$info" ] &amp;&amp; "$QPDF" --show-object="$info" "$target" 2&gt;/dev/null)
-case "$infodict" in *"$cdate"*) ;; *) missed="$missed"$'\n'"création (interne au PDF)" ;; esac
-case "$infodict" in *"$mdate"*) ;; *) missed="$missed"$'\n'"modification (interne au PDF)" ;; esac
+case "$infodict" in *"/CreationDate ($cdate)"*) ;; *) missed="$missed"$'\n'"création (interne au PDF)" ;; esac
+case "$infodict" in *"/ModDate ($mdate)"*) ;; *) missed="$missed"$'\n'"modification (interne au PDF)" ;; esac
 msg=""
 [ -z "$missed" ] || msg="ces dates n'ont pas pu être recalées :$missed"
 if [ -n "$notes" ]; then

@@ -50,6 +50,7 @@ run() {
   : >"$log"
   # The Finder hands a Quick Action no locale: the Terminal's is removed too.
   env -u LANG -u LC_ALL -u LC_CTYPE DIALOGS="$log" PATH="$T/bin:${FINDER_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" /bin/bash "$T/run.sh" "$@"
+  echo $? >"${log%.log}.rc"
 }
 said() { tr '\n' ' ' <"$T/$1.log"; }
 
@@ -136,6 +137,9 @@ pal.save(f"{d}/pal4.png", transparency=0, dpi=(150, 150)); pal.save(f"{d}/pal4.g
 mono = Image.new("1", (40, 30), 1)
 ImageDraw.Draw(mono).rectangle((0, 0, 9, 9), fill=0)
 mono.save(f"{d}/mono-t.png", transparency=0)
+gray = Image.new("L", (80, 48), 200)
+ImageDraw.Draw(gray).rectangle((0, 0, 19, 11), fill=40); ImageDraw.Draw(gray).line((0, 47, 79, 0), fill=120)
+gray.save(f"{d}/gris-brut6.tif", compression="raw", tiffinfo={274: 6}, dpi=(200, 100))  # uncompressed, turned, 200x100 dpi
 pic(300, 200).save(f"{d}/rgb6.tif", compression="tiff_lzw", tiffinfo={274: 6}, dpi=(204, 98))  # color TIFF, turned, 204x98 dpi
 # A PDF page drawn by two content streams, one uncompressed and one in ASCII85, with no xref table.
 import base64
@@ -148,7 +152,13 @@ def stream(n, data, extra=b""):
 raw = (b"%PDF-1.4\n" + obj(1, b"<</Type/Catalog/Pages 2 0 R>>") + obj(2, b"<</Type/Pages/Kids[3 0 R]/Count 1>>")
        + obj(3, b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Contents[4 0 R 5 0 R]>>")
        + stream(4, s1) + stream(5, s2, b"/Filter/ASCII85Decode") + b"trailer<</Root 1 0 R/Size 6>>\n%EOF\n")
-open(f"{d}/abime.pdf", "wb").write(raw)                                   # damaged: no xref, qpdf repairs it
+open(f"{d}/abime.pdf", "wb").write(raw)
+# 2-bit gray PNG whose value 1 is transparent (Pillow reads it scaled to 85), written by hand.
+import struct as st, zlib as zl
+def chunk2(k, b): return st.pack(">I", len(b)) + k + b + st.pack(">I", zl.crc32(k + b) & 0xffffffff)
+rows = b"".join(b"\x00" + bytes(((1 if x < 8 and y < 8 else 3) << 6 | (2 if y > 12 else 3) << 4 | 0 << 2 | 3) for x in range(5)) for y in range(16))
+open(f"{d}/gris2-t.png", "wb").write(b"\x89PNG\r\n\x1a\n" + chunk2(b"IHDR", st.pack(">IIBBBBB", 20, 16, 2, 0, 0, 0, 0))
+                                     + chunk2(b"tRNS", st.pack(">H", 1)) + chunk2(b"IDAT", zl.compress(rows)) + chunk2(b"IEND", b""))                                   # damaged: no xref, qpdf repairs it
 Image.new("1", (14000, 13000), 1).save(f"{d}/geant.png")                  # 182 Mpx, above Pillow's limit
 # Interlaced 16-bit color PNG (img2pdf would cut it to 8 bits without a word), written by hand: Pillow cannot write interlaced PNG.
 import struct, zlib
@@ -184,6 +194,7 @@ sips -s format heic "$T/heicsrc.jpg" --out "$IN/iphone.heic" >/dev/null 2>&1
 printf '<?xml version="1.0"?><Invoice/>' >"$T/factur-x.xml"
 "$QPDF" --add-attachment "$T/factur-x.xml" -- "$IN/b.pdf" "$IN/facture.pdf"
 cp "$IN/b.pdf" "$IN/b-sans-extension"                                       # a PDF without .pdf
+cp "$IN/b.pdf" "$IN/relevé.2025.10.pdf"                                     # dots inside the name
 cp "$IN/photo.jpg" "$IN/APPAREIL.JPG"                                       # a camera's upper case name
 cp "$IN/photo.jpg" "$IN/photo-sans-extension"                               # a JPEG without extension
 "$QPDF" --stream-data=preserve "$IN/abime.pdf" "$IN/brut.pdf" 2>/dev/null  # same page, repaired, streams kept
@@ -254,8 +265,8 @@ if have "$IN/Facture d'été.pdf" "$IN/photo.jpg" "$IN/b.pdf" "$IN/scan.tif" "$I
     idict=$("$QPDF" --show-object="$info" "$out" 2>/dev/null)
     # Expected dates computed by Python, time zone included, not by the action's own formula.
     pdfd() { "$PY" -c "import datetime,sys; s=datetime.datetime.fromtimestamp(int(sys.argv[1])).astimezone().strftime('%Y%m%d%H%M%S%z'); print('D:'+s[:17]+chr(39)+s[17:]+chr(39))" "$1"; }
-    case "$idict" in *"$(pdfd "$minb")"*) ok "date de création interne au PDF, fuseau compris ($(pdfd "$minb"))" ;; *) ko "date de création interne : $idict" ;; esac
-    case "$idict" in *"$(pdfd "$minm")"*) ok "date de modification interne au PDF, fuseau compris" ;; *) ko "date de modification interne : $idict" ;; esac
+    case "$idict" in *"/CreationDate ($(pdfd "$minb"))"*) ok "date de création interne au PDF, fuseau compris ($(pdfd "$minb"))" ;; *) ko "date de création interne : $idict" ;; esac
+    case "$idict" in *"/ModDate ($(pdfd "$minm"))"*) ok "date de modification interne au PDF, fuseau compris" ;; *) ko "date de modification interne : $idict" ;; esac
     [ -s "$T/mix.log" ] && ko "message affiché : $(said mix)" || ok "aucun message d'alerte"
     "$QPDF" --check "$out" >/dev/null 2>&1 && ok "qpdf --check : PDF sain" || ko "qpdf --check signale un problème"
   else
@@ -272,6 +283,15 @@ run again "$IN/Facture d'été.pdf" "$IN/b.pdf"
 run reverse "$IN/b.pdf" "$IN/Facture d'été.pdf"
 got=$(dims "$IN/b 2.pdf" 2>/dev/null)
 [ "$got" = "620x400 600x400 610x400 " ] && ok "ordre inversé respecté" || ko "ordre inversé : obtenu [$got] ; message : $(said reverse)"
+# The oldest dates come from the second file here, not the first.
+m1=$(stat -f %m "$IN/b.pdf"); m2=$(stat -f %m "$IN/Facture d'été.pdf"); [ "$m2" -lt "$m1" ] && m1=$m2
+b1=$(stat -f %B "$IN/b.pdf"); b2=$(stat -f %B "$IN/Facture d'été.pdf"); [ "$b2" -lt "$b1" ] && b1=$b2
+[ "$(stat -f %m "$IN/b 2.pdf" 2>/dev/null)" = "$m1" ] && [ "$(stat -f %B "$IN/b 2.pdf" 2>/dev/null)" = "$b1" ] &&
+  ok "ordre inversé : dates les plus anciennes prises au second fichier" || ko "ordre inversé : dates du PDF fausses"
+[ "$(cat "$T/reverse.rc")" = 0 ] && [ "$(cat "$T/mix.rc" 2>/dev/null)" = 0 ] && ok "fin sans erreur après un succès (code 0)" ||
+  ko "code de sortie $(cat "$T/reverse.rc") après un succès : Automator afficherait une erreur"
+run dots "$IN/relevé.2025.10.pdf"
+[ -f "$IN/relevé.2025.10 2.pdf" ] && ok "nom à plusieurs points : « relevé.2025.10 2.pdf »" || ko "nom à plusieurs points : $(ls "$IN" | grep '^relevé' | tr '\n' ' ')"
 
 # --- Case 4: orientation, displayed upright exactly once -----------------------------------------
 if have "$IN/portrait.tif"; then
@@ -284,15 +304,14 @@ if have "$IN/portrait2.Tiff"; then
   [ -f "$IN/portrait2.pdf" ] && [ "$(upright "$IN/portrait2.pdf")" = portrait ] && ok "TIFF nommé .Tiff : affiché droit aussi" ||
     ko "TIFF nommé .Tiff affiché couché ou absent ; message : $(said tif2)"
 fi
-# A fax scan is copied without decoding: decode the page back and compare it, pixel by pixel,
-# with the scan as an image viewer shows it.
-if have "$IN/fax.tif"; then
-  run fax "$IN/fax.tif"
-  k=$(pages "$IN/fax.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-  if [ -n "$k" ]; then
-    "$QPDF" --show-object="$k" --raw-stream-data "$IN/fax.pdf" >"$T/fax.bin"
-    "$QPDF" --show-object="$k" "$IN/fax.pdf" >"$T/fax.dict"
-    diffpx=$("$PY" - "$IN/fax.tif" "$T/fax.bin" "$T/fax.dict" <<'PYEOF'
+# faxdiff PDF TIFF : pixels of the first page's fax image that differ from the TIFF as a viewer shows it
+faxdiff() {
+  local k
+  k=$(pages "$1" 2>/dev/null | awk 'NR==1{print $2}')
+  [ -n "$k" ] && [ "$k" != "-" ] || { echo "aucune image"; return; }
+  "$QPDF" --show-object="$k" --raw-stream-data "$1" >"$T/fax.bin"
+  "$QPDF" --show-object="$k" "$1" >"$T/fax.dict"
+  "$PY" - "$2" "$T/fax.bin" "$T/fax.dict" 2>/dev/null <<'PYEOF'
 import io, re, struct, sys
 from PIL import Image, ImageOps
 src, raw, dic = sys.argv[1], open(sys.argv[2], "rb").read(), open(sys.argv[3]).read()
@@ -309,7 +328,14 @@ if got.size != want.size:
     print("taille %sx%s au lieu de %sx%s" % (got.size + want.size)); sys.exit()
 print(sum(a != b for a, b in zip(got.tobytes(), want.tobytes())))
 PYEOF
-)
+}
+# A fax scan is copied without decoding: decode the page back and compare it, pixel by pixel,
+# with the scan as an image viewer shows it.
+if have "$IN/fax.tif"; then
+  run fax "$IN/fax.tif"
+  k=$(pages "$IN/fax.pdf" 2>/dev/null | awk 'NR==1{print $2}')
+  if [ -n "$k" ]; then
+    diffpx=$(faxdiff "$IN/fax.pdf" "$IN/fax.tif")
     [ "$diffpx" = 0 ] && [ "$(upright "$IN/fax.pdf")" = portrait ] && ok "scan fax en portrait : redressé, identique pixel pour pixel" ||
       ko "scan fax en portrait : $diffpx pixels différents ou page couchée ; message : $(said fax)"
     # 300x200 px at 204x98 dpi, turned a quarter: 200 px at 98 dpi wide, 300 px at 204 dpi high.
@@ -322,15 +348,16 @@ fi
 if have "$IN/fax-sans-dpi.tif"; then
   run fax0 "$IN/fax-sans-dpi.tif"
   # No resolution: 96 dpi, like any other TIFF, so 200x300 px give 150x225 points.
-  [ "$(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null)" = "150 225" ] && ok "scan fax sans résolution : taille de page normale" ||
-    ko "scan fax sans résolution : page de $(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null) points au lieu de 150 225 ; message : $(said fax0)"
+  [ "$(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null)" = "150 225" ] && [ "$(faxdiff "$IN/fax-sans-dpi.pdf" "$IN/fax-sans-dpi.tif")" = 0 ] &&
+    ok "scan fax sans résolution : redressé pixel pour pixel, taille de page normale" ||
+    ko "scan fax sans résolution : $(faxdiff "$IN/fax-sans-dpi.pdf" "$IN/fax-sans-dpi.tif") pixels différents, page de $(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null) points au lieu de 150 225 ; message : $(said fax0)"
 fi
 # Transparent small-palette PNG and GIF, 1-bit PNG with a transparent color: decode each page and its
 # transparency mask back and compare them, pixel by pixel, with the source.
-if have "$IN/pal4.png" "$IN/pal4.gif" "$IN/mono-t.png"; then
-  run pal "$IN/pal4.png" "$IN/pal4.gif" "$IN/mono-t.png"
+if have "$IN/pal4.png" "$IN/pal4.gif" "$IN/mono-t.png" "$IN/gris2-t.png"; then
+  run pal "$IN/pal4.png" "$IN/pal4.gif" "$IN/mono-t.png" "$IN/gris2-t.png"
   n=0
-  for src in pal4.png pal4.gif mono-t.png; do
+  for src in pal4.png pal4.gif mono-t.png gris2-t.png; do
     n=$((n + 1))
     k=$(pages "$IN/pal4.pdf" 2>/dev/null | awk -v n=$n 'NR==n{print $2}')
     r="aucune page"
@@ -349,6 +376,10 @@ import re, sys
 from PIL import Image
 src, d, b, md, mb = sys.argv[1], open(sys.argv[2]).read(), open(sys.argv[3], "rb").read(), open(sys.argv[4]).read(), open(sys.argv[5], "rb").read()
 want = Image.open(src).convert("RGBA")
+if src.endswith("gris2-t.png"):  # Pillow reads the 2-bit values scaled: the transparent 1 is 85
+    g = Image.open(src).convert("L")
+    want = g.convert("RGBA")
+    want.putalpha(g.point(lambda v: 0 if v == 85 else 255))
 w, h = want.size
 if not md:
     print("transparence perdue"); sys.exit()
@@ -374,6 +405,30 @@ if have "$IN/rgb6.tif"; then
   [ "$(mbox "$IN/rgb6.pdf" 2>/dev/null)" = "147 106" ] && [ "$(upright "$IN/rgb6.pdf")" = portrait ] &&
     ok "TIFF couleur en portrait, résolution 204x98 : droit, taille de page juste" ||
     ko "TIFF couleur en portrait, résolution 204x98 : page de $(mbox "$IN/rgb6.pdf" 2>/dev/null) points au lieu de 147 106 ; message : $(said rgb6)"
+fi
+if have "$IN/gris-brut6.tif"; then
+  run brut6 "$IN/gris-brut6.tif"
+  k=$(pages "$IN/gris-brut6.pdf" 2>/dev/null | awk 'NR==1{print $2}')
+  r="aucune page"
+  if [ -n "$k" ] && [ "$k" != "-" ]; then
+    "$QPDF" --show-object="$k" "$IN/gris-brut6.pdf" >"$T/g.dict"
+    "$QPDF" --show-object="$k" --filtered-stream-data "$IN/gris-brut6.pdf" >"$T/g.bin" 2>/dev/null
+    r=$("$PY" -W ignore - "$IN/gris-brut6.tif" "$T/g.dict" "$T/g.bin" <<'PYEOF'
+import io, sys
+from PIL import Image, ImageOps
+src, d, b = sys.argv[1], open(sys.argv[2]).read(), open(sys.argv[3], "rb").read()
+# Read from memory: from a path, Pillow scrambles an uncompressed turned TIFF.
+want = ImageOps.exif_transpose(Image.open(io.BytesIO(open(src, "rb").read()))).convert("L")
+w, h = want.size
+if "/DeviceGray" not in d or "/BitsPerComponent 8" not in d or len(b) != w * h:
+    print("image inattendue"); sys.exit()
+print(sum(x != y for x, y in zip(b, want.tobytes())))
+PYEOF
+)
+  fi
+  # 80x48 px at 200x100 dpi, turned a quarter: 48 px at 100 dpi wide, 80 px at 200 dpi high.
+  [ "$r" = 0 ] && [ "$(mbox "$IN/gris-brut6.pdf")" = "35 29" ] && ok "TIFF gris non compressé en portrait : droit pixel pour pixel, taille juste" ||
+    ko "TIFF gris non compressé en portrait : $r pixels différents, page de $(mbox "$IN/gris-brut6.pdf" 2>/dev/null) points au lieu de 35 29 ; message : $(said brut6)"
 fi
 if [ -s "$IN/iphone.heic" ]; then
   o=""
