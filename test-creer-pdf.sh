@@ -100,7 +100,8 @@ upright() {
 }
 
 # --- Fixtures ------------------------------------------------------------------------------
-"$PY" - "$IN" "$T" <<'PYEOF'
+# A crash here would only show as skipped checks: it is reported as a failure.
+"$PY" - "$IN" "$T" 2>"$T/fixtures.err" <<'PYEOF' || ko "fabrication des fichiers d'essai interrompue : $(tail -n 1 "$T/fixtures.err")"
 import sys
 from PIL import Image, ImageDraw
 d, t = sys.argv[1], sys.argv[2]
@@ -141,6 +142,26 @@ gray = Image.new("L", (80, 48), 200)
 ImageDraw.Draw(gray).rectangle((0, 0, 19, 11), fill=40); ImageDraw.Draw(gray).line((0, 47, 79, 0), fill=120)
 gray.save(f"{d}/gris-brut6.tif", compression="raw", tiffinfo={274: 6}, dpi=(200, 100))  # uncompressed, turned, 200x100 dpi
 pic(300, 200).save(f"{d}/rgb6.tif", compression="tiff_lzw", tiffinfo={274: 6}, dpi=(204, 98))  # color TIFF, turned, 204x98 dpi
+pic(60, 40).save(f"{d}/big.tif", save_all=True, append_images=[pic(60, 40).rotate(180)], big_tiff=True, tiffinfo={274: 6})  # BigTIFF, 2 pages, turned
+Image.new("F", (30, 20), 0.5).save(f"{d}/flottant.tif")                    # 32-bit float: no lossless way in
+Image.new("I;16", (80, 48), 30000).save(f"{d}/gris16-6.tif", tiffinfo={274: 6}, dpi=(200, 100))  # 16 bits, turned
+pic(70, 50).save(f"{d}/img.bmp")
+pic(80, 60).save(f"{d}/plain.png")                                         # opaque PNG: copied as is by img2pdf
+# 16-bit color TIFF, turned, 200x100 dpi, written by hand: Pillow cannot write 16-bit color.
+import struct as s16
+def tiff16(path, w, h, orient, dpi):
+    px = b"".join(s16.pack("<HHH", x * 1500, y * 2500, 40000) for y in range(h) for x in range(w))
+    tags = [(256, 4, 1, w), (257, 4, 1, h), (258, 3, 3, 0), (259, 3, 1, 1), (262, 3, 1, 2), (273, 4, 1, 0), (274, 3, 1, orient),
+            (277, 3, 1, 3), (278, 4, 1, h), (279, 4, 1, len(px)), (282, 5, 1, 0), (283, 5, 1, 0), (296, 3, 1, 2)]
+    end = 8 + 2 + len(tags) * 12 + 4
+    off = {258: end, 282: end + 6, 283: end + 14, 273: end + 22}
+    ent = b""
+    for t, ty, c, v in tags:
+        v = off.get(t, v)
+        ent += s16.pack("<HHI", t, ty, c) + (s16.pack("<HH", v, 0) if ty == 3 and c == 1 else s16.pack("<I", v))
+    open(path, "wb").write(b"II*\x00" + s16.pack("<I", 8) + s16.pack("<H", len(tags)) + ent + s16.pack("<I", 0)
+                           + s16.pack("<HHH", 16, 16, 16) + s16.pack("<II", dpi[0], 1) + s16.pack("<II", dpi[1], 1) + px)
+tiff16(f"{d}/rgb16-6.tif", 40, 24, 6, (200, 100))
 # A PDF page drawn by two content streams, one uncompressed and one in ASCII85, with no xref table.
 import base64
 s1 = b"0 0 1 rg 10 10 80 80 re f\n"
@@ -197,6 +218,8 @@ cp "$IN/b.pdf" "$IN/b-sans-extension"                                       # a 
 cp "$IN/b.pdf" "$IN/relevé.2025.10.pdf"                                     # dots inside the name
 cp "$IN/photo.jpg" "$IN/APPAREIL.JPG"                                       # a camera's upper case name
 cp "$IN/photo.jpg" "$IN/photo-sans-extension"                               # a JPEG without extension
+for x in plain.png anim.gif w.webp img.bmp; do [ -s "$IN/$x" ] && cp "$IN/$x" "$IN/${x##*.}-sans-extension"; done
+cp "$IN/scan.tif" "$IN/SCAN2.TIF"                                           # 2-page scan, upper case name
 "$QPDF" --stream-data=preserve "$IN/abime.pdf" "$IN/brut.pdf" 2>/dev/null  # same page, repaired, streams kept
 
 # Dates as in the request: the first file at 11:05, the others at 11:06, one older creation.
@@ -530,6 +553,49 @@ jpegsame "$IN/APPAREIL.pdf" "$IN/photo.jpg" && ok "photo nommée .JPG en majuscu
 run noextjpg "$IN/photo-sans-extension"
 jpegsame "$IN/photo-sans-extension.pdf" "$IN/photo.jpg" && ok "photo JPEG sans extension : insérée octet pour octet" ||
   ko "photo JPEG sans extension : réencodée ou absente ; message : $(said noextjpg)"
+# Without extension, PNG, GIF, WebP and BMP are recognized by their first bytes: same page as with it.
+for x in png gif webp bmp; do
+  n=plain.png; [ $x = gif ] && n=anim.gif; [ $x = webp ] && n=w.webp; [ $x = bmp ] && n=img.bmp
+  if have "$IN/$n" "$IN/$x-sans-extension"; then
+    run "noext$x" "$IN/$x-sans-extension"
+    run "ext$x" "$IN/$n"
+    a=$(pages "$IN/$x-sans-extension.pdf" 2>/dev/null | awk 'NR==1{print $2}')
+    b=$(pages "$IN/${n%.*}.pdf" 2>/dev/null | awk 'NR==1{print $2}')
+    [ -n "$b" ] && "$QPDF" --show-object="$b" --raw-stream-data "$IN/${n%.*}.pdf" >"$T/e.bin" 2>/dev/null
+    [ -n "$a" ] && [ -n "$b" ] && [ "$a" != - ] &&
+      "$QPDF" --show-object="$a" --raw-stream-data "$IN/$x-sans-extension.pdf" 2>/dev/null | cmp -s - "$T/e.bin" &&
+      ok "image $x sans extension : même page qu'avec son extension" || ko "image $x sans extension : page différente ou absente ; message : $(said noext$x)"
+  fi
+done
+if have "$IN/SCAN2.TIF"; then
+  run scan2 "$IN/SCAN2.TIF"
+  [ "$("$QPDF" --show-npages "$IN/SCAN2.pdf" 2>/dev/null)" = 2 ] && ok "scan TIFF de 2 pages nommé .TIF en majuscules : 2 pages" ||
+    ko "scan .TIF de 2 pages : $("$QPDF" --show-npages "$IN/SCAN2.pdf" 2>/dev/null) page(s) ; message : $(said scan2)"
+fi
+if have "$IN/big.tif"; then
+  run big2 "$IN/big.tif"
+  [ "$("$QPDF" --show-npages "$IN/big.pdf" 2>/dev/null)" = 2 ] && [ "$(upright "$IN/big.pdf")" = portrait ] &&
+    ok "très gros TIFF (BigTIFF) de 2 pages en portrait : 2 pages, droit" ||
+    ko "BigTIFF : $("$QPDF" --show-npages "$IN/big.pdf" 2>/dev/null) page(s), $(upright "$IN/big.pdf" 2>/dev/null) ; message : $(said big2)"
+fi
+if have "$IN/flottant.tif"; then
+  run float "$IN/flottant.tif"
+  [ ! -e "$IN/flottant.pdf" ] && [ -s "$T/float.log" ] && ok "TIFF 32 bits flottant : refusé avec un message" ||
+    ko "TIFF 32 bits flottant : PDF créé (réduit en silence ?) ou refus sans message"
+fi
+for x in gris16-6 rgb16-6; do
+  if have "$IN/$x.tif"; then
+    run "t$x" "$IN/$x.tif"
+    k=$(pages "$IN/$x.pdf" 2>/dev/null | awk 'NR==1{print $2}')
+    if [ -n "$k" ]; then
+      "$QPDF" --show-object="$k" "$IN/$x.pdf" | grep -q "/BitsPerComponent 16" && [ "$(upright "$IN/$x.pdf")" = portrait ] &&
+        ok "TIFF 16 bits en portrait ($x) : gardé en 16 bits et droit" || ko "TIFF 16 bits en portrait ($x) : réduit ou couché"
+    else
+      grep -q "8 bits" "$T/t$x.log" && ok "TIFF 16 bits en portrait ($x) : refusé avec un message (orientation non garantie)" ||
+        ko "TIFF 16 bits en portrait ($x) : $(said t$x)"
+    fi
+  fi
+done
 # A folder where nothing can be written (a shared or locked folder): refused with a message.
 mkdir -p "$T/protege" && cp "$IN/b.pdf" "$T/protege/b.pdf" && chmod 555 "$T/protege"
 run ro "$T/protege/b.pdf"

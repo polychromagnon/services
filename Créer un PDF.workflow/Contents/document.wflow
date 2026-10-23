@@ -96,6 +96,10 @@ deep() { grep -q -i -e "8 bits per sample" -e "&gt;8bit" "$work/$i.err"; }
 # really 16 bits and not interlaced.
 png16() {
   [ "$frames" = 1 ] || return 1
+  # Whether sips turns the pixels, keeps the orientation tag or drops it is not known for
+  # sure: an image above 8 bits that is not stored upright is refused rather than risked.
+  o=$("$PY" -I -c 'import sys; from PIL import Image; print(Image.open(sys.argv[1]).getexif().get(274, 1))' "$1" 2&gt;/dev/null)
+  [ "${o:-1}" = 1 ] || return 1
   bits=$(sips -g bitsPerSample "$1" 2&gt;/dev/null | awk '/bitsPerSample/ {print $2}')
   [ -n "$bits" ] &amp;&amp; [ "$bits" -le 16 ] || return 1
   sips -s format png "$1" --out "$work/$i.png" &gt;/dev/null 2&gt;&amp;1 || return 1
@@ -205,7 +209,7 @@ PY
           src="$work/$i-rgba.png"
         fi
         ;;
-      49492a00 | 4d4d002a)
+      49492a00 | 4d4d002a | 49492b00 | 4d4d002b) # TIFF, then BigTIFF
         opt=()
         rot=--rotation=none
         # Two kinds of turned TIFF page are turned here, one page per file, losslessly:
