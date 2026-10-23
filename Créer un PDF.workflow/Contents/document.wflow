@@ -173,6 +173,23 @@ for f in "$@"; do
     opt=(--first-frame-only)
     rot=--rotation=ifvalid
     case "$(magic "$src")" in
+      89504e47 | 47494638)
+        # img2pdf writes the transparency mask of a small-palette PNG or GIF on 8 bits but
+        # declares it with the palette's depth, which blanks the page, and drops the
+        # transparent color of a 1-bit image: such an image is first expanded to RGBA,
+        # which keeps every pixel, its resolution and its orientation.
+        if "$PY" -I - "$src" "$work/$i-rgba.png" &lt;&lt;'PY' 2&gt;"$work/$i.err"; then
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1])
+if im.mode not in ("P", "1", "L") or "transparency" not in im.info:
+    sys.exit(1)
+keep = {k: im.info[k] for k in ("dpi", "exif") if im.info.get(k)}
+im.convert("RGBA").save(sys.argv[2], **keep)
+PY
+          src="$work/$i-rgba.png"
+        fi
+        ;;
       49492a00 | 4d4d002a)
         opt=()
         rot=--rotation=none
@@ -191,6 +208,14 @@ try:
         im.seek(k)
         fax = fax and im.mode == "1" and im.info.get("compression") in ("group3", "group4", "tiff_ccitt")
         turned = turned or im.tag_v2.get(274, 1) != 1
+        if k == 0:
+            # Pillow reports (1, 1) for a scan with no resolution: left out, so img2pdf
+            # uses its 96 dpi default as for any other TIFF; a quarter turn swaps x and y.
+            dpi = im.info.get("dpi")
+            if dpi and tuple(dpi) != (1, 1):
+                extra = {"dpi": dpi[::-1] if im.tag_v2.get(274, 1) in (5, 6, 7, 8) else dpi}
+            else:
+                extra = {}
 except Exception:
     print(0)
     sys.exit(0)
@@ -200,8 +225,6 @@ if fax and turned:
         im.seek(k)
         im.load()
         pages.append(im.copy())
-    dpi = im.info.get("dpi")
-    extra = {"dpi": dpi} if dpi else {}
     pages[0].save(out, compression="group4", save_all=True, append_images=pages[1:], **extra)
     print(n, "turned")
 else:

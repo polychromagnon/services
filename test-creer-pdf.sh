@@ -17,7 +17,8 @@ okn=0
 kon=0
 ok() { echo "OK     $1"; okn=$((okn + 1)); }
 ko() { echo "ÉCHEC  $1"; kon=$((kon + 1)); }
-note() { echo "INFO   $1"; }
+skn=0
+note() { echo "INFO   $1"; case "$1" in *sauté*) skn=$((skn + 1)) ;; esac; }
 have() { # FILE... : true when every fixture exists, else says which one is missing
   local x
   for x in "$@"; do [ -s "$x" ] || { note "essai sauté, fichier d'essai non fabriqué : $(basename "$x")"; return 1; }; done
@@ -59,6 +60,11 @@ pages() {
     END { if (p) print p, img, dim }'
 }
 dims() { pages "$1" | awk '{printf "%s ", $3}'; }
+# mbox PDF : width and height of the first page, in whole points
+mbox() {
+  "$QPDF" --show-object="$(pages "$1" | awk 'NR==1{print $1}')" "$1" |
+    sed -n 's/.*\/MediaBox *\[ *[-0-9.]* *[-0-9.]* *\([-0-9.]*\) *\([-0-9.]*\) *\].*/\1 \2/p' | awk '{printf "%d %d", $1 + 0.5, $2 + 0.5}'
+}
 # upright PDF : "portrait" or "paysage", as the first page is displayed (image size + /Rotate)
 upright() {
   local line w h rot
@@ -90,14 +96,24 @@ pic(690, 400).save(f"{d}/w.webp", lossless=True)
 pic(60, 40).save(f"{d}/portrait.tif", tiffinfo={274: 6})                  # TIFF stored landscape, tag 6
 pic(70, 40).save(f"{d}/miroir.jpg", exif=exif(5))                          # mirrored orientation
 pic(80, 40).save(f"{t}/heicsrc.jpg", exif=exif(6))
-Image.new("I;16", (50, 30), 30000).save(f"{d}/gris16.png")                # 16-bit PNG: kept as is
+Image.new("I;16", (50, 30), 30000).save(f"{d}/png16.png")                 # 16-bit PNG: kept as is
 Image.new("I;16", (50, 30), 30000).save(f"{d}/gris16.tif")                # 16-bit TIFF: kept or refused
 pg = [Image.new("I;16", (50, 30), v) for v in (1000, 40000)]
 pg[0].save(f"{d}/multi16.tif", save_all=True, append_images=pg[1:])       # 2 pages of 16 bits: refused
 fax = Image.new("1", (300, 200), 1)                                        # fax scan stored landscape, tag 6
 dr = ImageDraw.Draw(fax)
 dr.rectangle((10, 10, 120, 90), fill=0); dr.line((0, 0, 299, 199), fill=0); dr.ellipse((150, 40, 280, 180), outline=0)
-fax.save(f"{d}/fax.tif", compression="group4", tiffinfo={274: 6}, dpi=(200, 200))
+fax.save(f"{d}/fax.tif", compression="group4", tiffinfo={274: 6}, dpi=(204, 98))  # standard fax resolution
+fax.save(f"{d}/fax-sans-dpi.tif", compression="group4", tiffinfo={274: 6})  # no resolution at all
+# Small palettes with a transparent color (img2pdf mislabels their mask) and a 1-bit one with a transparent color.
+pal = Image.new("P", (40, 30), 1)
+pal.putpalette([255, 0, 0, 0, 0, 255, 0, 160, 0, 250, 220, 0])
+dp = ImageDraw.Draw(pal)
+dp.rectangle((0, 0, 9, 9), fill=0); dp.rectangle((20, 0, 29, 9), fill=2); dp.rectangle((0, 20, 9, 29), fill=3)
+pal.save(f"{d}/pal4.png", transparency=0); pal.save(f"{d}/pal4.gif", transparency=0)
+mono = Image.new("1", (40, 30), 1)
+ImageDraw.Draw(mono).rectangle((0, 0, 9, 9), fill=0)
+mono.save(f"{d}/mono-t.png", transparency=0)
 Image.new("1", (14000, 13000), 1).save(f"{d}/geant.png")                  # 182 Mpx, above Pillow's limit
 # Interlaced 16-bit color PNG (img2pdf would cut it to 8 bits without a word), written by hand: Pillow cannot write interlaced PNG.
 import struct, zlib
@@ -258,9 +274,58 @@ PYEOF
 )
     [ "$diffpx" = 0 ] && [ "$(upright "$IN/fax.pdf")" = portrait ] && ok "scan fax en portrait : redressé, identique pixel pour pixel" ||
       ko "scan fax en portrait : $diffpx pixels différents ou page couchée ; message : $(said fax)"
+    # 300x200 px at 204x98 dpi, turned a quarter: 200 px at 98 dpi wide, 300 px at 204 dpi high.
+    [ "$(mbox "$IN/fax.pdf")" = "147 106" ] && ok "scan fax en portrait : taille de page juste (résolution 204x98 tournée)" ||
+      ko "scan fax en portrait : page de $(mbox "$IN/fax.pdf") points au lieu de 147 106"
   else
     ko "scan fax en portrait : aucun PDF ; message : $(said fax)"
   fi
+fi
+if have "$IN/fax-sans-dpi.tif"; then
+  run fax0 "$IN/fax-sans-dpi.tif"
+  # No resolution: 96 dpi, like any other TIFF, so 200x300 px give 150x225 points.
+  [ "$(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null)" = "150 225" ] && ok "scan fax sans résolution : taille de page normale" ||
+    ko "scan fax sans résolution : page de $(mbox "$IN/fax-sans-dpi.pdf" 2>/dev/null) points au lieu de 150 225 ; message : $(said fax0)"
+fi
+# Transparent small-palette PNG and GIF, 1-bit PNG with a transparent color: decode each page and its
+# transparency mask back and compare them, pixel by pixel, with the source.
+if have "$IN/pal4.png" "$IN/pal4.gif" "$IN/mono-t.png"; then
+  run pal "$IN/pal4.png" "$IN/pal4.gif" "$IN/mono-t.png"
+  n=0
+  for src in pal4.png pal4.gif mono-t.png; do
+    n=$((n + 1))
+    k=$(pages "$IN/pal4.pdf" 2>/dev/null | awk -v n=$n 'NR==n{print $2}')
+    r="aucune page"
+    if [ -n "$k" ] && [ "$k" != "-" ]; then
+      "$QPDF" --show-object="$k" "$IN/pal4.pdf" >"$T/pal.dict"
+      "$QPDF" --show-object="$k" --filtered-stream-data "$IN/pal4.pdf" >"$T/pal.bin" 2>/dev/null
+      m=$(sed -n 's/.*\/SMask \([0-9]*\) 0 R.*/\1/p' "$T/pal.dict")
+      : >"$T/palm.dict"
+      : >"$T/palm.bin"
+      if [ -n "$m" ]; then
+        "$QPDF" --show-object="$m" "$IN/pal4.pdf" >"$T/palm.dict"
+        "$QPDF" --show-object="$m" --filtered-stream-data "$IN/pal4.pdf" >"$T/palm.bin" 2>/dev/null
+      fi
+      r=$("$PY" -W ignore - "$IN/$src" "$T/pal.dict" "$T/pal.bin" "$T/palm.dict" "$T/palm.bin" <<'PYEOF'
+import re, sys
+from PIL import Image
+src, d, b, md, mb = sys.argv[1], open(sys.argv[2]).read(), open(sys.argv[3], "rb").read(), open(sys.argv[4]).read(), open(sys.argv[5], "rb").read()
+want = Image.open(src).convert("RGBA")
+w, h = want.size
+if not md:
+    print("transparence perdue"); sys.exit()
+if "/DeviceRGB" not in d or "/BitsPerComponent 8" not in d or "/BitsPerComponent 8" not in md or len(b) != w * h * 3 or len(mb) != w * h:
+    print("image ou masque inattendu (%s, %s)" % (" ".join(re.findall(r"/(?:ColorSpace|BitsPerComponent) \S+", d)), " ".join(re.findall(r"/BitsPerComponent \S+", md))))
+    sys.exit()
+got = Image.frombytes("RGB", (w, h), b)
+got.putalpha(Image.frombytes("L", (w, h), mb))
+# A fully transparent pixel shows nothing: its color does not count.
+print(sum(1 for p, q in zip(got.getdata(), want.getdata()) if p != q and (p[3] or q[3])))
+PYEOF
+)
+    fi
+    [ "$r" = 0 ] && ok "transparence de $src gardée, identique pixel pour pixel" || ko "transparence de $src : $r ; message : $(said pal)"
+  done
 fi
 if [ -s "$IN/iphone.heic" ]; then
   o=""
@@ -319,10 +384,10 @@ if have "$IN/geant.png"; then
   [ "$("$QPDF" --show-npages "$IN/geant.pdf" 2>/dev/null)" = 1 ] && ok "image géante (182 millions de pixels) acceptée" ||
     ko "image géante : $(said big)"
 fi
-if have "$IN/gris16.png"; then
-  run png16 "$IN/gris16.png"
-  k=$(pages "$IN/gris16.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-  [ -n "$k" ] && "$QPDF" --show-object="$k" "$IN/gris16.pdf" | grep -q "/BitsPerComponent 16" && ok "PNG 16 bits gardé en 16 bits" ||
+if have "$IN/png16.png"; then
+  run png16 "$IN/png16.png"
+  k=$(pages "$IN/png16.pdf" 2>/dev/null | awk 'NR==1{print $2}')
+  [ -n "$k" ] && "$QPDF" --show-object="$k" "$IN/png16.pdf" | grep -q "/BitsPerComponent 16" && ok "PNG 16 bits gardé en 16 bits" ||
     ko "PNG 16 bits : $(said png16)"
 fi
 run locked "$IN/verrou.pdf" "$IN/b.pdf"
@@ -363,7 +428,7 @@ if [ -x /usr/bin/osacompile ]; then
   [ -s "$T/warn.applescript" ] && /usr/bin/osacompile -o "$T/warn.scpt" "$T/warn.applescript" 2>"$T/osa.err" &&
     ok "message d'alerte : AppleScript valide" || ko "message d'alerte : AppleScript invalide ($(cat "$T/osa.err"))"
 else
-  note "osacompile absent : AppleScript du message non vérifié"
+  note "osacompile absent : essai de l'AppleScript du message sauté"
 fi
 
 # --- Originals untouched ------------------------------------------------------------------------
@@ -371,7 +436,11 @@ fi
   ok "fichiers d'origine inchangés, dates comprises" || ko "un fichier d'origine a changé"
 
 echo
-echo "Bilan : $okn OK, $kon ÉCHEC"
+if [ "$skn" -eq 0 ]; then
+  echo "Bilan : $okn OK, $kon ÉCHEC"
+else
+  echo "Bilan : $okn OK, $kon ÉCHEC, $skn essai(s) sauté(s), voir les lignes INFO"
+fi
 if [ "$kon" -eq 0 ]; then
   rm -rf "$T"
 else
