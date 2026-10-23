@@ -530,6 +530,12 @@ jpegsame "$IN/APPAREIL.pdf" "$IN/photo.jpg" && ok "photo nommée .JPG en majuscu
 run noextjpg "$IN/photo-sans-extension"
 jpegsame "$IN/photo-sans-extension.pdf" "$IN/photo.jpg" && ok "photo JPEG sans extension : insérée octet pour octet" ||
   ko "photo JPEG sans extension : réencodée ou absente ; message : $(said noextjpg)"
+# A folder where nothing can be written (a shared or locked folder): refused with a message.
+mkdir -p "$T/protege" && cp "$IN/b.pdf" "$T/protege/b.pdf" && chmod 555 "$T/protege"
+run ro "$T/protege/b.pdf"
+[ ! -e "$T/protege/b 2.pdf" ] && grep -q "Écriture impossible" "$T/ro.log" && ok "dossier protégé en écriture : refusé avec un message" ||
+  ko "dossier protégé en écriture : $(said ro)"
+chmod 755 "$T/protege"
 cb=$(stat -f %B "$IN/copie.pdf")
 cm=$(stat -f %m "$IN/copie.pdf")
 if [ "$cb" -gt "$cm" ]; then

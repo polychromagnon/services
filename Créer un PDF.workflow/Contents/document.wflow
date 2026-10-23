@@ -118,6 +118,9 @@ for f in "$@"; do
   name=$(basename "$f")
   [ -d "$f" ] &amp;&amp; fail "« $name » est un dossier : sélectionne seulement des PDF et des images."
   [ -r "$f" ] || fail "Lecture impossible : $name"
+  # Reading one byte makes macOS download a file kept only in iCloud; offline, it fails here.
+  head -c 1 -- "$f" &gt;/dev/null 2&gt;&amp;1 ||
+    fail "« $name » n'a pas pu être lu. S'il est dans iCloud, ouvre-le une fois pour le télécharger, puis recommence."
 
   # stat -L: a symlink's dates are those of the file it points to.
   m=$(stat -L -f %m -- "$f")
@@ -321,7 +324,10 @@ rc=$?
 got=$("$QPDF" --show-npages "$work/final.pdf" 2&gt;/dev/null)
 [ "$got" = "$expected" ] || fail "Des pages se sont perdues pendant l'assemblage ($got sur $expected)."
 
-mv -n -- "$work/final.pdf" "$target" &amp;&amp; [ -e "$target" ] || fail "Écriture impossible dans $dir"
+# -n never overwrites: if the same name appeared meanwhile (the action run twice at once),
+# the PDF is still here and nothing is claimed.
+mv -n -- "$work/final.pdf" "$target" 2&gt;/dev/null &amp;&amp; [ ! -e "$work/final.pdf" ] ||
+  fail "Écriture impossible dans $dir (dossier protégé, ou action lancée deux fois en même temps)."
 
 # File dates: modification first, creation last, because lowering the modification date
 # below the creation date drags the creation date down with it.
