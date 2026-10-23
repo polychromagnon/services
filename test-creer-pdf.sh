@@ -48,7 +48,8 @@ run() {
   local log="$T/$1.log"
   shift
   : >"$log"
-  DIALOGS="$log" PATH="$T/bin:${FINDER_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" /bin/bash "$T/run.sh" "$@"
+  # The Finder hands a Quick Action no locale: the Terminal's is removed too.
+  env -u LANG -u LC_ALL -u LC_CTYPE DIALOGS="$log" PATH="$T/bin:${FINDER_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" /bin/bash "$T/run.sh" "$@"
 }
 said() { tr '\n' ' ' <"$T/$1.log"; }
 
@@ -60,10 +61,31 @@ pages() {
     END { if (p) print p, img, dim }'
 }
 dims() { pages "$1" | awk '{printf "%s ", $3}'; }
+# samepage SRC OUT : every content stream of SRC's pages (at least 2) is in OUT, byte for byte
+samepage() {
+  local k o found c=0
+  for k in $("$QPDF" --show-pages "$1" | awk '/^ *[0-9]+ 0 R$/{print $1}'); do
+    c=$((c + 1))
+    "$QPDF" --show-object="$k" --raw-stream-data "$1" >"$T/s.bin" 2>/dev/null
+    found=0
+    for o in $("$QPDF" --show-pages "$2" 2>/dev/null | awk '/^ *[0-9]+ 0 R$/{print $1}'); do
+      "$QPDF" --show-object="$o" --raw-stream-data "$2" 2>/dev/null | cmp -s - "$T/s.bin" && { found=1; break; }
+    done
+    [ "$found" -eq 1 ] || return 1
+  done
+  [ "$c" -ge 2 ]
+}
+# jpegsame PDF JPEG : the first page's image is the JPEG file, byte for byte
+jpegsame() {
+  local k
+  k=$(pages "$1" 2>/dev/null | awk 'NR==1{print $2}')
+  [ -n "$k" ] && [ "$k" != "-" ] && "$QPDF" --show-object="$k" --raw-stream-data "$1" 2>/dev/null | cmp -s - "$2"
+}
 # mbox PDF : width and height of the first page, in whole points
 mbox() {
   "$QPDF" --show-object="$(pages "$1" | awk 'NR==1{print $1}')" "$1" |
-    sed -n 's/.*\/MediaBox *\[ *[-0-9.]* *[-0-9.]* *\([-0-9.]*\) *\([-0-9.]*\) *\].*/\1 \2/p' | awk '{printf "%d %d", $1 + 0.5, $2 + 0.5}'
+    sed -n 's/.*\/MediaBox *\[ *[-0-9.]* *[-0-9.]* *\([-0-9.]*\) *\([-0-9.]*\) *\].*/\1 \2/p' |
+    LC_ALL=C awk '{printf "%d %d", $1 + 0.5, $2 + 0.5}' # macOS awk reads "146.94" as 146 in a French locale
 }
 # upright PDF : "portrait" or "paysage", as the first page is displayed (image size + /Rotate)
 upright() {
@@ -110,10 +132,23 @@ pal = Image.new("P", (40, 30), 1)
 pal.putpalette([255, 0, 0, 0, 0, 255, 0, 160, 0, 250, 220, 0])
 dp = ImageDraw.Draw(pal)
 dp.rectangle((0, 0, 9, 9), fill=0); dp.rectangle((20, 0, 29, 9), fill=2); dp.rectangle((0, 20, 9, 29), fill=3)
-pal.save(f"{d}/pal4.png", transparency=0); pal.save(f"{d}/pal4.gif", transparency=0)
+pal.save(f"{d}/pal4.png", transparency=0, dpi=(150, 150)); pal.save(f"{d}/pal4.gif", transparency=0)
 mono = Image.new("1", (40, 30), 1)
 ImageDraw.Draw(mono).rectangle((0, 0, 9, 9), fill=0)
 mono.save(f"{d}/mono-t.png", transparency=0)
+pic(300, 200).save(f"{d}/rgb6.tif", compression="tiff_lzw", tiffinfo={274: 6}, dpi=(204, 98))  # color TIFF, turned, 204x98 dpi
+# A PDF page drawn by two content streams, one uncompressed and one in ASCII85, with no xref table.
+import base64
+s1 = b"0 0 1 rg 10 10 80 80 re f\n"
+s2 = base64.a85encode(b"1 0 0 rg 40 40 20 20 re f\n") + b"~>"
+def obj(n, body):
+    return b"%d 0 obj" % n + body + b"endobj\n"
+def stream(n, data, extra=b""):
+    return obj(n, b"<</Length %d%s>>stream\n" % (len(data), extra) + data + b"\nendstream ")
+raw = (b"%PDF-1.4\n" + obj(1, b"<</Type/Catalog/Pages 2 0 R>>") + obj(2, b"<</Type/Pages/Kids[3 0 R]/Count 1>>")
+       + obj(3, b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Contents[4 0 R 5 0 R]>>")
+       + stream(4, s1) + stream(5, s2, b"/Filter/ASCII85Decode") + b"trailer<</Root 1 0 R/Size 6>>\n%EOF\n")
+open(f"{d}/abime.pdf", "wb").write(raw)                                   # damaged: no xref, qpdf repairs it
 Image.new("1", (14000, 13000), 1).save(f"{d}/geant.png")                  # 182 Mpx, above Pillow's limit
 # Interlaced 16-bit color PNG (img2pdf would cut it to 8 bits without a word), written by hand: Pillow cannot write interlaced PNG.
 import struct, zlib
@@ -149,6 +184,9 @@ sips -s format heic "$T/heicsrc.jpg" --out "$IN/iphone.heic" >/dev/null 2>&1
 printf '<?xml version="1.0"?><Invoice/>' >"$T/factur-x.xml"
 "$QPDF" --add-attachment "$T/factur-x.xml" -- "$IN/b.pdf" "$IN/facture.pdf"
 cp "$IN/b.pdf" "$IN/b-sans-extension"                                       # a PDF without .pdf
+cp "$IN/photo.jpg" "$IN/APPAREIL.JPG"                                       # a camera's upper case name
+cp "$IN/photo.jpg" "$IN/photo-sans-extension"                               # a JPEG without extension
+"$QPDF" --stream-data=preserve "$IN/abime.pdf" "$IN/brut.pdf" 2>/dev/null  # same page, repaired, streams kept
 
 # Dates as in the request: the first file at 11:05, the others at 11:06, one older creation.
 for f in "$IN"/*; do touch -t 202510041106 "$f"; done
@@ -326,6 +364,16 @@ PYEOF
     fi
     [ "$r" = 0 ] && ok "transparence de $src gardée, identique pixel pour pixel" || ko "transparence de $src : $r ; message : $(said pal)"
   done
+  # 40x30 px at 150 dpi: 19.2x14.4 points.
+  [ "$(mbox "$IN/pal4.pdf" 2>/dev/null)" = "19 14" ] && ok "image à palette : résolution gardée" ||
+    ko "image à palette : page de $(mbox "$IN/pal4.pdf" 2>/dev/null) points au lieu de 19 14"
+fi
+if have "$IN/rgb6.tif"; then
+  run rgb6 "$IN/rgb6.tif"
+  # Same sizes as the fax: 300x200 px at 204x98 dpi, turned a quarter.
+  [ "$(mbox "$IN/rgb6.pdf" 2>/dev/null)" = "147 106" ] && [ "$(upright "$IN/rgb6.pdf")" = portrait ] &&
+    ok "TIFF couleur en portrait, résolution 204x98 : droit, taille de page juste" ||
+    ko "TIFF couleur en portrait, résolution 204x98 : page de $(mbox "$IN/rgb6.pdf" 2>/dev/null) points au lieu de 147 106 ; message : $(said rgb6)"
 fi
 if [ -s "$IN/iphone.heic" ]; then
   o=""
@@ -411,6 +459,22 @@ fi
 run noext "$IN/b-sans-extension"
 [ "$("$QPDF" --show-npages "$IN/b-sans-extension.pdf" 2>/dev/null)" = 1 ] && ok "PDF sans extension .pdf : repris comme PDF" ||
   ko "PDF sans extension : $(said noext)"
+if have "$IN/brut.pdf"; then
+  run brut "$IN/brut.pdf"
+  samepage "$IN/brut.pdf" "$IN/brut 2.pdf" && ok "flux non compressé et flux ASCII85 recopiés octet pour octet" ||
+    ko "flux non compressé ou ASCII85 réécrit ; message : $(said brut)"
+fi
+if have "$IN/abime.pdf"; then
+  run abime "$IN/abime.pdf" "$IN/b.pdf"
+  [ "$("$QPDF" --show-npages "$IN/abime 2.pdf" 2>/dev/null)" = 2 ] && ok "PDF légèrement abîmé : réparé et repris" ||
+    ko "PDF légèrement abîmé : $(said abime)"
+fi
+run upper "$IN/APPAREIL.JPG"
+jpegsame "$IN/APPAREIL.pdf" "$IN/photo.jpg" && ok "photo nommée .JPG en majuscules : insérée octet pour octet" ||
+  ko "photo nommée .JPG : réencodée ou absente ; message : $(said upper)"
+run noextjpg "$IN/photo-sans-extension"
+jpegsame "$IN/photo-sans-extension.pdf" "$IN/photo.jpg" && ok "photo JPEG sans extension : insérée octet pour octet" ||
+  ko "photo JPEG sans extension : réencodée ou absente ; message : $(said noextjpg)"
 cb=$(stat -f %B "$IN/copie.pdf")
 cm=$(stat -f %m "$IN/copie.pdf")
 if [ "$cb" -gt "$cm" ]; then

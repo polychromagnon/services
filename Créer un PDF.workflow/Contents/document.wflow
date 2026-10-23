@@ -148,6 +148,12 @@ for f in "$@"; do
     src="$f"
     case "$ext" in
       jpg | jpeg | jpe | jfif | png | gif | tif | tiff | bmp | webp | jp2 | j2k | jpf | jpx) ;;
+      # No or unknown extension: a JPEG, PNG, GIF, BMP, WebP or JPEG 2000 is recognized by its
+      # first bytes. A TIFF never is: camera RAW files (DNG, NEF...) are TIFF inside.
+      *) case "$(magic "$f")" in ffd8ff* | 89504e47 | 47494638 | 424d* | 52494646 | 0000000c) ext=img ;; esac ;;
+    esac
+    case "$ext" in
+      jpg | jpeg | jpe | jfif | png | gif | tif | tiff | bmp | webp | jp2 | j2k | jpf | jpx | img) ;;
       *)
         src="$work/$i.tiff"
         sips -s format tiff "$f" --out "$src" &gt;/dev/null 2&gt;&amp;1 ||
@@ -172,6 +178,7 @@ for f in "$@"; do
     # Pillow already turns a TIFF upright when it opens it: img2pdf must not turn it again.
     opt=(--first-frame-only)
     rot=--rotation=ifvalid
+    srcs=()
     case "$(magic "$src")" in
       89504e47 | 47494638)
         # img2pdf writes the transparency mask of a small-palette PNG or GIF on 8 bits but
@@ -193,52 +200,58 @@ PY
       49492a00 | 4d4d002a)
         opt=()
         rot=--rotation=none
-        # A fax-compressed (CCITT) black and white scan is copied by img2pdf without
-        # decoding, so Pillow's turn would scramble it: such a scan, when its orientation
-        # is not upright, is turned here and stored again as a lossless fax TIFF.
-        frames=$("$PY" -I - "$src" "$work/$i-up.tiff" &lt;&lt;'PY' 2&gt;"$work/$i.err"
+        # Two kinds of turned TIFF page are turned here, one page per file, losslessly:
+        # a fax-compressed (CCITT) one, which img2pdf copies undecoded so that Pillow's
+        # turn would scramble it, and one turned a quarter with a different x and y
+        # resolution, which img2pdf would size unswapped. Pages above 8 bits are left to
+        # the 16-bit route below.
+        frames=$("$PY" -I - "$src" "$work/$i-up" &lt;&lt;'PY' 2&gt;"$work/$i.err"
 import sys
 from PIL import Image
 src, out = sys.argv[1], sys.argv[2]
 try:
     im = Image.open(src)
     n = getattr(im, "n_frames", 1)
-    fax, turned = True, False
-    for k in range(n):
-        im.seek(k)
-        fax = fax and im.mode == "1" and im.info.get("compression") in ("group3", "group4", "tiff_ccitt")
-        turned = turned or im.tag_v2.get(274, 1) != 1
-        if k == 0:
-            # Pillow reports (1, 1) for a scan with no resolution: left out, so img2pdf
-            # uses its 96 dpi default as for any other TIFF; a quarter turn swaps x and y.
-            dpi = im.info.get("dpi")
-            if dpi and tuple(dpi) != (1, 1):
-                extra = {"dpi": dpi[::-1] if im.tag_v2.get(274, 1) in (5, 6, 7, 8) else dpi}
-            else:
-                extra = {}
-except Exception:
-    print(0)
-    sys.exit(0)
-if fax and turned:
     pages = []
     for k in range(n):
         im.seek(k)
-        im.load()
-        pages.append(im.copy())
-    pages[0].save(out, compression="group4", save_all=True, append_images=pages[1:], **extra)
-    print(n, "turned")
-else:
+        fax = im.mode == "1" and im.info.get("compression") in ("group3", "group4", "tiff_ccitt")
+        bits = im.tag_v2.get(258, (8,))
+        bits = max(bits) if isinstance(bits, tuple) else bits
+        # Pillow reports (1, 1) for a scan with no resolution: left out, so img2pdf
+        # uses its 96 dpi default as for any other TIFF.
+        dpi = im.info.get("dpi")
+        dpi = tuple(dpi) if dpi and tuple(dpi) != (1, 1) else None
+        pages.append((fax, im.tag_v2.get(274, 1), bits, dpi))
+except Exception:
+    print(0)
+    sys.exit(0)
+quarter = (5, 6, 7, 8)
+need = any((fax and o != 1) or (o in quarter and dpi and dpi[0] != dpi[1]) for fax, o, bits, dpi in pages)
+if not need or any(bits &gt; 8 for fax, o, bits, dpi in pages):
     print(n)
+    sys.exit(0)
+for k, (fax, o, bits, dpi) in enumerate(pages):
+    im.seek(k)
+    im.load()
+    extra = {"dpi": dpi[::-1] if o in quarter else dpi} if dpi else {}
+    im.copy().save("%s-%05d.tiff" % (out, k), compression="group4" if fax else "tiff_adobe_deflate", **extra)
+print(n, "turned")
 PY
 )
         case "$frames" in
-          *turned) src="$work/$i-up.tiff" frames=${frames% turned} ;;
+          *turned)
+            srcs=("$work/$i-up-"*.tiff)
+            src=${srcs[0]}
+            frames=${frames% turned}
+            ;;
           "") fail "« $name » : scan TIFF impossible à redresser ($(tail -n 1 "$work/$i.err" | cut -c1-150))." ;;
         esac
         ;;
     esac
+    [ ${#srcs[@]} -eq 0 ] &amp;&amp; srcs=("$src")
     # --pillow-limit-break: very large scans and panoramas are legitimate input.
-    if ! "$IMG2PDF" "$rot" --pillow-limit-break "${opt[@]}" -o "$page" "$src" 2&gt;"$work/$i.err"; then
+    if ! "$IMG2PDF" "$rot" --pillow-limit-break "${opt[@]}" -o "$page" "${srcs[@]}" 2&gt;"$work/$i.err"; then
       if deep; then
         png16 "$src" || fail "« $name » a plus de 8 bits par couleur : impossible de l'insérer sans perte."
       # A misnamed file (a HEIC saved as .jpg...) gets a second chance through macOS.
