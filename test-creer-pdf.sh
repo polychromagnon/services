@@ -112,6 +112,8 @@ def sha(path):
 D = os.path.join(T, "in")
 os.mkdir(D)
 srgb = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+p3 = open("/System/Library/ColorSync/Profiles/Display P3.icc", "rb").read()  # the iPhone's color space
+desc = lambda icc: ImageCms.getProfileDescription(ImageCms.ImageCmsProfile(io.BytesIO(icc)))
 up = pattern()                      # what every photo must look like, upright
 turned = up.transpose(Image.Transpose.ROTATE_90)  # stored on its side, EXIF says turn it back
 
@@ -123,7 +125,8 @@ ex[274] = 6
 ex.get_ifd(0x8769).update({0x9003: "2019:05:12 14:03:22", 0x9011: "+02:00"})
 turned.save(f"{D}/photo.jpg", quality=92, exif=ex, icc_profile=srgb)
 pattern(alpha=True).save(f"{D}/capture.png")
-subprocess.run(["sips", "-s", "format", "heic", f"{D}/photo.jpg", "--out", f"{D}/iphone.heic"], capture_output=True)
+turned.save(f"{D}/p3.jpg", quality=95, exif=ex, icc_profile=p3)
+subprocess.run(["sips", "-s", "format", "heic", f"{D}/p3.jpg", "--out", f"{D}/iphone.heic"], capture_output=True)
 mix = [f"{D}/a.pdf", f"{D}/photo.jpg", f"{D}/capture.png", f"{D}/iphone.heic", f"{D}/b.pdf"]
 for f in mix:
     setdates(f, ts("2023-01-01T10:00:00"), ts("2024-01-01T10:00:00"))
@@ -145,7 +148,10 @@ if out:
         check(x.ColorSpace[0] == "/ICCBased" and x.ColorSpace[1].read_bytes() == srgb, "JPEG : profil de couleurs gardé")
         check(same(page_image(p[3])[0], pattern(alpha=True)), "capture d'écran : chaque point identique, transparence comprise")
         if os.path.exists(f"{D}/iphone.heic"):
-            check(near(page_image(p[4])[0], up), "HEIC : page à l'endroit, couleurs justes")
+            im, x, _ = page_image(p[4])
+            check(near(im, up), "HEIC : page à l'endroit, couleurs justes")
+            check(x.ColorSpace[0] == "/ICCBased" and desc(x.ColorSpace[1].read_bytes()) == desc(p3),
+                  "HEIC : profil de couleurs de l'iPhone (Display P3) gardé")
         else:
             check(False, "HEIC : sips n'a pas pu fabriquer la photo d'essai")
         want_c, want_m = ts("2019-05-12T14:03:22+02:00"), ts("2018-07-04T12:00:00+00:00")

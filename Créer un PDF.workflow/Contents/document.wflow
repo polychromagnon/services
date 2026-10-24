@@ -70,7 +70,7 @@
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 for t in img2pdf qpdf exiftool; do
   if [ ! -x "/opt/homebrew/bin/$t" ]; then
-    osascript -e 'on run argv' -e 'display dialog (item 1 of argv) buttons {"OK"} default button "OK" with icon caution with title "Créer un PDF"' \
+    osascript -e 'on run argv' -e activate -e 'display dialog (item 1 of argv) buttons {"OK"} default button "OK" with icon caution with title "Créer un PDF"' \
       -e 'end run' "$t est introuvable. Dans le Terminal : brew install $t"$'\n\nAucun PDF créé.' &gt;/dev/null
     exit 0
   fi
