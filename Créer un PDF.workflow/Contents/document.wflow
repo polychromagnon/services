@@ -266,18 +266,18 @@ def add_image(path, name, k, i, work):
     if deep:
         refuse(f"« {name} » a plus de 8 bits par couleur et ne peut pas être inséré sans perte.")
     # Second way: decode, turn upright, store every pixel losslessly as PNG.
-    pngs = []
-    for j in range(frames):
-        im.seek(j)
-        fr = ImageOps.exif_transpose(im)
-        if fr.mode in ("P", "PA"):
-            fr = fr.convert("RGBA" if fr.mode == "PA" or "transparency" in fr.info else "RGB")
-        if fr.mode not in ("1", "L", "LA", "RGB", "RGBA"):
-            refuse(f"« {name} » utilise un codage de couleurs ({fr.mode}) qui ne peut pas être inséré sans perte.")
-        keep = {key: im.info[key] for key in ("icc_profile", "dpi") if im.info.get(key)}
-        pngs.append(os.path.join(work, f"{i}-{j}.png"))
-        fr.save(pngs[-1], **keep)
     try:
+        pngs = []
+        for j in range(frames):
+            im.seek(j)
+            fr = ImageOps.exif_transpose(im)
+            if fr.mode in ("P", "PA"):
+                fr = fr.convert("RGBA" if fr.mode == "PA" or "transparency" in fr.info else "RGB")
+            if fr.mode not in ("1", "L", "LA", "RGB", "RGBA"):
+                raise ValueError(fr.mode)  # CMYK, 32-bit...: no lossless PNG for them
+            keep = {key: im.info[key] for key in ("icc_profile", "dpi") if im.info.get(key)}
+            pngs.append(os.path.join(work, f"{i}-{j}.png"))
+            fr.save(pngs[-1], **keep)
         pdf = img2pdf.convert(pngs, rotation=img2pdf.Rotation.none)
         ok = identical(pdf, path, "decoded", im, frames, False)
     except Exception:
