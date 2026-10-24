@@ -60,231 +60,367 @@
 				<dict>
 					<key>COMMAND_STRING</key>
 					<string>#!/bin/bash
-# Called by the Finder context menu (Automator Quick Action "Créer un PDF").
-# Merges the selected PDFs and images, in selection order (Finder hands "$@" in click
-# order, checked by Michael 2026-10-20), into one PDF next to the first file, without
-# losing anything: qpdf copies PDF pages byte for byte, img2pdf embeds JPEG and PNG as
-# they are and stores other images losslessly. The result gets the oldest creation date and the oldest
-# modification date of the sources, on the file (Finder) and inside the PDF.
+# Finder Quick Action "Créer un PDF": Apple's Create PDF, lossless and dated.
+# The selected PDFs and images, in click order, become one PDF next to the first file,
+# named like Apple ("doc1 2.pdf"). PDF pages are copied byte for byte; every image page is
+# compared with its source before use, and an image that cannot be proven identical is
+# refused. The result carries the oldest creation date and the oldest modification date
+# found among the sources (Finder dates, photo capture date, dates written inside a PDF).
+# The work runs in img2pdf's own Python, which holds img2pdf, Pillow and pikepdf.
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
-QPDF="${QPDF:-/opt/homebrew/bin/qpdf}"
-IMG2PDF="${IMG2PDF:-/opt/homebrew/bin/img2pdf}"
-
-# Messages travel as osascript arguments, never inside the AppleScript text.
-warn() {
-  osascript - "$1" &lt;&lt;'AS' &gt;/dev/null
-on run argv
-  activate
-  display dialog (item 1 of argv) buttons {"OK"} default button "OK" with icon caution with title "Créer un PDF"
-end run
-AS
-}
-fail() { warn "$1"$'\n\nAucun PDF créé.'; exit 1; }
-
-[ "$#" -eq 0 ] &amp;&amp; exit 0
-for t in "$QPDF" "$IMG2PDF"; do
-  [ -x "$t" ] || fail "$(basename "$t") est introuvable. Dans le Terminal : brew install qpdf img2pdf"
-done
-# img2pdf's own Python (from its first line) also runs the Pillow snippet below.
-PY=$(sed -n '1s/^#! *//p' "$IMG2PDF")
-[ -x "$PY" ] || fail "Python d'img2pdf introuvable ($PY). Dans le Terminal : brew reinstall img2pdf"
-# First bytes as hex: the content says what a file is, whatever its name.
-magic() { od -An -tx1 -N4 "$1" | tr -d ' \n'; }
-deep() { grep -q -i -e "8 bits per sample" -e "&gt;8bit" "$work/$i.err"; }
-# More than 8 bits per color: macOS can write the image as a 16-bit PNG, which img2pdf
-# embeds as is. Kept only when nothing is lost: a one-page image stored upright (what sips
-# does with other pages or an orientation is not known for sure), and a PNG really 16 bits
-# and not interlaced.
-png16() {
-  [ "$("$PY" -I -c 'import sys; from PIL import Image; im = Image.open(sys.argv[1]); print(getattr(im, "n_frames", 1), im.getexif().get(274, 1))' "$1" 2&gt;/dev/null)" = "1 1" ] || return 1
-  sips -s format png "$1" --out "$work/$i.png" &gt;/dev/null 2&gt;&amp;1 || return 1
-  read -r d _ _ _ l &lt;&lt;&lt;"$(od -An -tu1 -j24 -N5 "$work/$i.png")"
-  [ "$d" = 16 ] &amp;&amp; [ "$l" = 0 ] || return 1
-  "$IMG2PDF" --rotation=ifvalid --pillow-limit-break -o "$page" "$work/$i.png" 2&gt;"$work/$i.err"
-}
-
-work=$(mktemp -d) || fail "Dossier temporaire impossible à créer."
-trap 'rm -rf "$work"' EXIT
-
-parts=()
-notes=""
-expected=0
-oldest_b=""
-oldest_m=""
-i=0
-for f in "$@"; do
-  i=$((i + 1))
-  name=$(basename "$f")
-  [ -d "$f" ] &amp;&amp; fail "« $name » est un dossier : sélectionne seulement des PDF et des images."
-  [ -r "$f" ] || fail "Lecture impossible : $name"
-  # Reading one byte makes macOS download a file kept only in iCloud; offline, it fails here.
-  head -c 1 -- "$f" &gt;/dev/null 2&gt;&amp;1 ||
-    fail "« $name » n'a pas pu être lu. S'il est dans iCloud, ouvre-le une fois pour le télécharger, puis recommence."
-
-  # stat -L: a symlink's dates are those of the file it points to.
-  m=$(stat -L -f %m -- "$f")
-  b=$(stat -L -f %B -- "$f")
-  [ -z "$b" ] || [ "$b" -le 0 ] &amp;&amp; b=$m # some volumes keep no creation date
-  { [ -z "$oldest_m" ] || [ "$m" -lt "$oldest_m" ]; } &amp;&amp; oldest_m=$m
-  { [ -z "$oldest_b" ] || [ "$b" -lt "$oldest_b" ]; } &amp;&amp; oldest_b=$b
-
-  ext=$(printf '%s' "${name##*.}" | tr '[:upper:]' '[:lower:]')
-  if [ "$ext" = "pdf" ] || [ "$(magic "$f")" = 25504446 ]; then
-    n=$("$QPDF" --show-npages "$f" 2&gt;/dev/null)
-    [ -n "$n" ] || fail "« $name » n'est pas un PDF lisible, ou il est protégé par un mot de passe."
-    # A page-by-page merge keeps pages only: attached files (the XML of a Factur-X
-    # invoice...) and layers are left behind, so say it and keep the original.
-    "$QPDF" --list-attachments "$f" 2&gt;/dev/null | grep -q -v "has no embedded files" &amp;&amp;
-      notes="$notes"$'\n'"« $name » : pièces jointes (facture Factur-X ?) non reprises, garde l'original"
-    root=$("$QPDF" --show-object=trailer "$f" 2&gt;/dev/null | sed -n 's/.*\/Root \([0-9][0-9]*\) 0 R.*/\1/p')
-    [ -n "$root" ] &amp;&amp; "$QPDF" --show-object="$root" "$f" 2&gt;/dev/null | grep -q "/OCProperties" &amp;&amp;
-      notes="$notes"$'\n'"« $name » : calques, un calque masqué peut devenir visible"
-    "$QPDF" --json --json-key=acroform "$f" 2&gt;/dev/null | grep -q '"fieldtype": "/Sig"' &amp;&amp;
-      notes="$notes"$'\n'"« $name » : signature électronique, elle ne vaut plus dans le PDF assemblé, garde l'original"
-    parts+=("$f")
-  else
-    page="$work/$i.pdf"
-    # Common formats go straight to img2pdf, which embeds them as they are. Anything else
-    # (HEIC, camera RAW...) is decoded by macOS into a lossless TIFF first: Pillow would
-    # read only the small preview of a NEF or DNG, without any error.
-    src="$f"
-    case "$ext" in
-      jpg | jpeg | jpe | jfif | png | gif | tif | tiff | bmp | webp | jp2 | j2k | jpf | jpx) ;;
-      # No or unknown extension: a JPEG, PNG, GIF, BMP, WebP or JPEG 2000 is recognized by its
-      # first bytes. A TIFF never is: camera RAW files (DNG, NEF...) are TIFF inside.
-      *) case "$(magic "$f")" in ffd8ff* | 89504e47 | 47494638 | 424d* | 52494646 | 0000000c) ext=img ;; esac ;;
-    esac
-    case "$ext" in
-      jpg | jpeg | jpe | jfif | png | gif | tif | tiff | bmp | webp | jp2 | j2k | jpf | jpx | img) ;;
-      *)
-        src="$work/$i.tiff"
-        sips -s format tiff "$f" --out "$src" &gt;/dev/null 2&gt;&amp;1 ||
-          fail "« $name » n'est ni un PDF ni une image lisible."
-        ;;
-    esac
-    # One page per photo: the extra frames of a JPEG (depth or gain map of a phone photo)
-    # or of an animated GIF are dropped; a multipage TIFF scan keeps all its pages.
-    # Pillow already turns a TIFF upright when it opens it: img2pdf must not turn it again.
-    opt=(--first-frame-only)
-    rot=--rotation=ifvalid
-    case "$(magic "$src")" in
-      89504e47 | 47494638)
-        # img2pdf writes the transparency mask of a small-palette PNG or GIF (a logo, an
-        # icon) on 8 bits but declares it with the palette's depth, which blanks the page:
-        # such an image is first expanded to RGBA, which keeps every pixel, its resolution
-        # and its orientation.
-        if "$PY" -I - "$src" "$work/$i-rgba.png" &lt;&lt;'PY' 2&gt;"$work/$i.err"; then
-import sys
-from PIL import Image
-im = Image.open(sys.argv[1])
-if im.mode not in ("P", "1", "L") or "transparency" not in im.info:
-    sys.exit(1)
-keep = {k: im.info[k] for k in ("dpi", "exif") if im.info.get(k)}
-im.convert("RGBA").save(sys.argv[2], **keep)
-PY
-          src="$work/$i-rgba.png"
-        fi
-        ;;
-      49492a00 | 4d4d002a)
-        opt=()
-        rot=--rotation=none
-        ;;
-    esac
-    # --pillow-limit-break: very large scans and panoramas are legitimate input.
-    if ! "$IMG2PDF" "$rot" --pillow-limit-break "${opt[@]}" -o "$page" "$src" 2&gt;"$work/$i.err"; then
-      if deep; then
-        png16 "$src" || fail "« $name » a plus de 8 bits par couleur : impossible de l'insérer sans perte."
-      # A misnamed file (a HEIC saved as .jpg...) gets a second chance through macOS.
-      elif [ "$src" = "$f" ] &amp;&amp; sips -s format tiff "$f" --out "$work/$i.tiff" &gt;/dev/null 2&gt;&amp;1 &amp;&amp;
-        "$IMG2PDF" --rotation=none --pillow-limit-break "${opt[@]}" -o "$page" "$work/$i.tiff" 2&gt;"$work/$i.err"; then
-        :
-      elif deep; then
-        png16 "$work/$i.tiff" || fail "« $name » a plus de 8 bits par couleur : impossible de l'insérer sans perte."
-      else
-        fail "« $name » n'est pas une image lisible ($(tail -n 1 "$work/$i.err" | cut -c1-150))."
-      fi
-    fi
-    # img2pdf cannot mirror an image: a mirrored EXIF orientation stays as stored.
-    grep -q -i "flipped" "$work/$i.err" &amp;&amp; notes="$notes"$'\n'"« $name » : orientation en miroir non appliquée"
-    n=$("$QPDF" --show-npages "$page")
-    parts+=("$page")
+for t in img2pdf qpdf exiftool; do
+  if [ ! -x "/opt/homebrew/bin/$t" ]; then
+    osascript -e 'on run argv' -e 'display dialog (item 1 of argv) buttons {"OK"} default button "OK" with icon caution with title "Créer un PDF"' \
+      -e 'end run' "$t est introuvable. Dans le Terminal : brew install $t"$'\n\nAucun PDF créé.' &gt;/dev/null
+    exit 0
   fi
-  expected=$((expected + n))
 done
+PY=$(sed -n '1s/^#! *//p' /opt/homebrew/bin/img2pdf)
+exec "$PY" -I - "$@" &lt;&lt;'PY'
+import io, json, logging, os, re, shutil, subprocess, sys, tempfile, time
+from datetime import datetime, timedelta, timezone
+import img2pdf, pikepdf
+from PIL import Image, ImageOps
 
-# Same naming as Apple: "doc1.pdf", or "doc1 2.pdf", "doc1 3.pdf"... when taken.
-dir=$(dirname "$1")
-first=$(basename "$1")
-stem="${first%.*}"
-target="$dir/$stem.pdf"
-k=2
-while [ -e "$target" ]; do target="$dir/$stem $k.pdf"; k=$((k + 1)); done
+QPDF = "/opt/homebrew/bin/qpdf"
+EXIFTOOL = "/opt/homebrew/bin/exiftool"
 
-# --stream-data=preserve: every stream is copied as is, never decoded nor recompressed.
-# Exit code 3 means success with warnings (a slightly damaged source qpdf could read).
-"$QPDF" --stream-data=preserve --empty --pages "${parts[@]}" -- "$work/merged.pdf" 2&gt;/dev/null
-rc=$?
-[ "$rc" -eq 0 ] || [ "$rc" -eq 3 ] || fail "L'assemblage a échoué (qpdf, code $rc)."
 
-# Internal dates: a new /Info object added through qpdf's JSON update. The trailer is
-# replaced as written, so it carries /Root and /Size too.
-pdfdate() {
-  local s
-  s=$(date -r "$1" +%Y%m%d%H%M%S%z)
-  printf "D:%s%s'%s'" "${s:0:14}" "${s:14:3}" "${s:17:2}"
-}
-trailer=$("$QPDF" --show-object=trailer "$work/merged.pdf" 2&gt;/dev/null)
-root=$(printf '%s' "$trailer" | sed -n 's/.*\/Root \([0-9][0-9]*\) 0 R.*/\1/p')
-size=$(printf '%s' "$trailer" | sed -n 's/.*\/Size \([0-9][0-9]*\).*/\1/p')
-[ -n "$root" ] &amp;&amp; [ -n "$size" ] || fail "Structure du PDF assemblé inattendue."
-cdate=$(pdfdate "$oldest_b")
-mdate=$(pdfdate "$oldest_m")
-cat &gt;"$work/info.json" &lt;&lt;EOF
-{"qpdf":[{"jsonversion":2,"pushedinheritedpageresources":false,"calledgetallpages":false,"maxobjectid":$((size - 1))},
-{"obj:$size 0 R":{"value":{"/CreationDate":"u:$cdate","/ModDate":"u:$mdate"}},
-"trailer":{"value":{"/Root":"$root 0 R","/Info":"$size 0 R","/Size":$((size + 1))}}}]}
-EOF
-"$QPDF" --stream-data=preserve "$work/merged.pdf" --update-from-json="$work/info.json" "$work/final.pdf" 2&gt;/dev/null
-rc=$?
-[ "$rc" -eq 0 ] || [ "$rc" -eq 3 ] || fail "Écriture des dates internes impossible (qpdf, code $rc)."
+def dialog(text):
+    subprocess.run(["osascript", "-e", "on run argv", "-e", "activate", "-e",
+                    'display dialog (item 1 of argv) buttons {"OK"} default button "OK" '
+                    'with icon caution with title "Créer un PDF"', "-e", "end run", text],
+                   capture_output=True)
 
-# Never pass on a PDF that lost pages on the way.
-got=$("$QPDF" --show-npages "$work/final.pdf" 2&gt;/dev/null)
-[ "$got" = "$expected" ] || fail "Des pages se sont perdues pendant l'assemblage ($got sur $expected)."
 
-# -n never overwrites: if the same name appeared meanwhile (the action run twice at once),
-# the PDF is still here and nothing is claimed.
-mv -n -- "$work/final.pdf" "$target" 2&gt;/dev/null &amp;&amp; [ ! -e "$work/final.pdf" ] ||
-  fail "Écriture impossible dans $dir (dossier protégé, ou action lancée deux fois en même temps)."
+class Refused(Exception):
+    pass
 
-# File dates: modification first, creation last, because lowering the modification date
-# below the creation date drags the creation date down with it.
-osascript -l JavaScript - "$target" "$oldest_m" "$oldest_b" &lt;&lt;'JXA' &gt;/dev/null
-function run(argv) {
+
+def refuse(text):
+    raise Refused(text)
+
+
+Image.MAX_IMAGE_PIXELS = None  # big scans and panoramas are legitimate input
+logging.disable(logging.WARNING)
+ANGLE = {1: 0, 3: 180, 6: 90, 8: 270}  # EXIF orientation -&gt; clockwise page rotation
+notes = []
+
+
+def kind(path):
+    with open(path, "rb") as f:
+        m = f.read(12)
+    ext = os.path.splitext(path)[1].lower()
+    if m.startswith(b"%PDF") or ext == ".pdf":
+        return "pdf"
+    if m.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if m.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if m.startswith((b"GIF8", b"BM")) or (m[:4] == b"RIFF" and m[8:12] == b"WEBP"):
+        return "pillow"
+    # Camera RAW files are TIFF inside: Pillow would read only their small preview.
+    if m[:4] in (b"II*\x00", b"MM\x00*") and ext in (".tif", ".tiff"):
+        return "tiff"
+    return "macos"  # HEIC, AVIF, RAW...: decoded by macOS itself
+
+
+def add_pdf(path, name):
+    try:
+        pdf = pikepdf.open(path)
+    except pikepdf.PasswordError:
+        refuse(f"« {name} » est protégé par un mot de passe.")
+    except Exception:
+        refuse(f"« {name} » n'est pas un PDF lisible.")
+    with pdf:
+        # A page-by-page merge keeps pages only.
+        if len(pdf.attachments):
+            notes.append(f"« {name} » : pièces jointes (facture Factur-X ?) non reprises, garde l'original")
+        if "/OCProperties" in pdf.Root:
+            notes.append(f"« {name} » : calques, un calque masqué peut devenir visible, garde l'original")
+        form = pdf.Root.get("/AcroForm")
+        fields = list(form.get("/Fields", [])) if form is not None else []
+        while fields:
+            f = fields.pop()
+            if f.get("/FT") == "/Sig" and "/V" in f:
+                notes.append(f"« {name} » : signature électronique, elle ne vaut plus dans le PDF assemblé, garde l'original")
+                break
+            fields.extend(f.get("/Kids", []))
+        return len(pdf.pages)
+
+
+def bits(path, k, im):
+    """Bits per color sample of the file itself (Pillow silently reads 16-bit RGB as 8)."""
+    if k == "png":
+        with open(path, "rb") as f:
+            return f.read(25)[24]
+    if k == "tiff":
+        b = im.tag_v2.get(258, (8,))
+        return max(b) if isinstance(b, tuple) else b
+    return 8
+
+
+def idat(path):
+    with open(path, "rb") as f:
+        data, out = f.read(), []
+    pos = 8
+    while pos &lt; len(data):
+        n = int.from_bytes(data[pos:pos + 4], "big")
+        if data[pos + 4:pos + 8] == b"IDAT":
+            out.append(data[pos + 8:pos + 8 + n])
+        pos += 12 + n
+    return b"".join(out), data[16:29]
+
+
+def icc_of(x):
+    cs = x.get("/ColorSpace")
+    if isinstance(cs, pikepdf.Array) and cs[0] == "/Indexed":
+        cs = cs[1]
+    if isinstance(cs, pikepdf.Array) and cs[0] == "/ICCBased":
+        return cs[1].read_bytes()
+    return None
+
+
+def displayed(x, rot):
+    got = pikepdf.PdfImage(x).as_pil_image()
+    if "/SMask" in x and got.mode not in ("RGBA", "LA"):
+        got = got.convert("RGBA")
+        got.putalpha(pikepdf.PdfImage(x.SMask).as_pil_image().convert("L"))
+    turn = {90: Image.Transpose.ROTATE_270, 180: Image.Transpose.ROTATE_180, 270: Image.Transpose.ROTATE_90}
+    return got.transpose(turn[rot]) if rot else got
+
+
+def same_pixels(a, b):
+    if a.size != b.size:
+        return False
+    if a.mode == b.mode and a.mode not in ("P", "PA"):
+        return a.tobytes() == b.tobytes()
+    alpha = any(i.mode in ("RGBA", "LA", "PA") or "transparency" in i.info for i in (a, b))
+    mode = "RGBA" if alpha else "RGB"
+    return a.convert(mode).tobytes() == b.convert(mode).tobytes()
+
+
+def identical(pdfbytes, path, k, im, frames, deep):
+    """True when every page shows exactly its source frame, upright, with its color profile."""
+    with pikepdf.open(io.BytesIO(pdfbytes)) as pdf:
+        if len(pdf.pages) != frames:
+            return False
+        for j, page in enumerate(pdf.pages):
+            xs = list(page.get_images(recursive=False).values())
+            if len(xs) != 1:
+                return False
+            x = xs[0]
+            rot = int(page.obj.get("/Rotate", 0)) % 360
+            im.seek(j)
+            icc = im.info.get("icc_profile")
+            if icc and icc_of(x) != icc:
+                return False
+            if k == "jpeg" or deep:
+                # Stored as is: the bytes must be the source's, turned by the page only.
+                if rot != ANGLE.get(im.getexif().get(274, 1)):
+                    return False
+                raw = x.read_raw_bytes()
+                if k == "jpeg":
+                    with open(path, "rb") as f:
+                        src = f.read()
+                    # A phone JPEG may carry extra images (gain map...): only the first one is kept.
+                    if not (raw == src or (src.startswith(raw) and raw.endswith(b"\xff\xd9"))):
+                        return False
+                else:
+                    # A 16-bit PNG: its compressed rows must be copied untouched.
+                    data, ihdr = idat(path)
+                    width, depth, ctype, interlace = int.from_bytes(ihdr[0:4], "big"), ihdr[8], ihdr[9], ihdr[12]
+                    parms = x.get("/DecodeParms", {})
+                    if (raw != data or interlace or ctype not in (0, 2) or "/SMask" in x
+                            or x.BitsPerComponent != depth or parms.get("/Predictor") != 15
+                            or parms.get("/Columns") != width or parms.get("/Colors") != (1 if ctype == 0 else 3)):
+                        return False
+                continue
+            if not same_pixels(displayed(x, rot), ImageOps.exif_transpose(im)):
+                return False
+    return True
+
+
+def add_image(path, name, k, i, work):
+    if k == "macos":
+        src = os.path.join(work, f"{i}.png")
+        r = subprocess.run(["sips", "-s", "format", "png", path, "--out", src], capture_output=True)
+        if r.returncode or not os.path.isfile(src):
+            refuse(f"« {name} » n'est ni un PDF ni une image lisible.")
+        path, k = src, "png"
+    try:
+        im = Image.open(path)
+        frames = getattr(im, "n_frames", 1) if k == "tiff" else 1  # a scan keeps its pages, a photo gives one
+        deep = bits(path, k, im) &gt; 8
+    except Exception:
+        refuse(f"« {name} » n'est pas une image lisible.")
+    if deep and k != "png":
+        refuse(f"« {name} » a plus de 8 bits par couleur et ne peut pas être inséré sans perte.")
+    # First way: img2pdf stores the file as it is (JPEG and most PNG untouched).
+    try:
+        pdf = img2pdf.convert(path, rotation=img2pdf.Rotation.ifvalid, first_frame_only=(k != "tiff"))
+        if identical(pdf, path, k, im, frames, deep):
+            return pdf, frames
+    except Exception:
+        pass
+    if deep:
+        refuse(f"« {name} » a plus de 8 bits par couleur et ne peut pas être inséré sans perte.")
+    # Second way: decode, turn upright, store every pixel losslessly as PNG.
+    pngs = []
+    for j in range(frames):
+        im.seek(j)
+        fr = ImageOps.exif_transpose(im)
+        if fr.mode in ("P", "PA"):
+            fr = fr.convert("RGBA" if fr.mode == "PA" or "transparency" in fr.info else "RGB")
+        if fr.mode not in ("1", "L", "LA", "RGB", "RGBA"):
+            refuse(f"« {name} » utilise un codage de couleurs ({fr.mode}) qui ne peut pas être inséré sans perte.")
+        keep = {key: im.info[key] for key in ("icc_profile", "dpi") if im.info.get(key)}
+        pngs.append(os.path.join(work, f"{i}-{j}.png"))
+        fr.save(pngs[-1], **keep)
+    try:
+        pdf = img2pdf.convert(pngs, rotation=img2pdf.Rotation.none)
+        ok = identical(pdf, path, "decoded", im, frames, False)
+    except Exception:
+        ok = False
+    if not ok:
+        refuse(f"« {name} » ne peut pas être inséré à l'identique.")
+    return pdf, frames
+
+
+def parse(text, offset=None):
+    m = re.match(r"(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d)(?::(\d\d))?(Z|[+-]\d\d:?\d\d)?", text or "")
+    if not m:
+        return None
+    try:
+        d = datetime(*(int(v or 0) for v in m.groups()[:6]))
+    except ValueError:
+        return None  # "0000:00:00 00:00:00" and the like
+    tz = m.group(7) or offset
+    if tz:
+        if tz == "Z":
+            return d.replace(tzinfo=timezone.utc).timestamp()
+        t = tz.replace(":", "")
+        delta = timedelta(hours=int(t[1:3]), minutes=int(t[3:5]))
+        return d.replace(tzinfo=timezone(delta if t[0] == "+" else -delta)).timestamp()
+    return time.mktime(d.timetuple())  # no time zone: the Mac's own
+
+
+def oldest_dates(files):
+    created, modified = [], []
+    for f in files:
+        st = os.stat(f)
+        b = getattr(st, "st_birthtime", 0)
+        created.append(b if b &gt; 0 else st.st_mtime)  # some volumes keep no creation date
+        modified.append(st.st_mtime)
+    r = subprocess.run([EXIFTOOL, "-j", "-q", "-q", "-n", "-DateTimeOriginal", "-OffsetTimeOriginal",
+                        "-PDF:CreateDate", "-PDF:ModifyDate", *files], capture_output=True, text=True)
+    try:
+        if r.returncode:
+            raise ValueError
+        for rec in json.loads(r.stdout):
+            for t in (parse(rec.get("DateTimeOriginal"), rec.get("OffsetTimeOriginal")), parse(rec.get("CreateDate"))):
+                if t:
+                    created.append(t)
+            t = parse(rec.get("ModifyDate"))
+            if t:
+                modified.append(t)
+    except ValueError:
+        notes.append("dates de prise de vue ou dates internes d'un PDF illisibles : la date retenue peut être trop récente")
+    return int(min(created)), int(min(modified))
+
+
+def pdfdate(t):
+    d = datetime.fromtimestamp(t).astimezone()
+    z = d.strftime("%z")
+    return d.strftime("D:%Y%m%d%H%M%S") + f"{z[:3]}'{z[3:]}'"
+
+
+def run(files, work):
+    parts, expected = [], 0
+    for i, f in enumerate(files, 1):
+        name = os.path.basename(f)
+        if os.path.isdir(f):
+            refuse(f"« {name} » est un dossier : sélectionne seulement des PDF et des images.")
+        try:
+            k = kind(f)  # reading makes macOS download a file kept only in iCloud
+        except OSError:
+            refuse(f"« {name} » n'a pas pu être lu. S'il est dans iCloud, ouvre-le une fois pour le télécharger, puis recommence.")
+        if k == "pdf":
+            expected += add_pdf(f, name)
+            parts.append(f)
+        else:
+            pdf, n = add_image(f, name, k, i, work)
+            expected += n
+            parts.append(os.path.join(work, f"{i}.pdf"))
+            with open(parts[-1], "wb") as out:
+                out.write(pdf)
+
+    created, modified = oldest_dates(files)
+    merged = os.path.join(work, "merged.pdf")
+    # --stream-data=preserve: every stream is copied as is, never decoded nor recompressed.
+    r = subprocess.run([QPDF, "--stream-data=preserve", "--empty", "--pages", *parts, "--", merged],
+                       capture_output=True, text=True)
+    if r.returncode not in (0, 3):
+        refuse(f"L'assemblage a échoué (qpdf : {r.stderr.strip()[-150:]}).")
+    if r.returncode == 3:
+        notes.append("un PDF source était abîmé et a été réparé au passage : vérifie le PDF créé")
+    final = os.path.join(work, "final.pdf")
+    with pikepdf.open(merged) as pdf:
+        if len(pdf.pages) != expected:
+            refuse(f"Des pages se sont perdues pendant l'assemblage ({len(pdf.pages)} sur {expected}).")
+        pdf.docinfo["/CreationDate"] = pdfdate(created)
+        pdf.docinfo["/ModDate"] = pdfdate(modified)
+        pdf.save(final, compress_streams=False, stream_decode_level=pikepdf.StreamDecodeLevel.none)
+
+    # Same naming as Apple: "doc1.pdf", or "doc1 2.pdf", "doc1 3.pdf"... when taken. Creating
+    # the file exclusively claims the name, even if the action runs twice at once.
+    folder = os.path.dirname(files[0])
+    stem = os.path.splitext(os.path.basename(files[0]))[0]
+    n = 1
+    while True:
+        target = os.path.join(folder, f"{stem}.pdf" if n == 1 else f"{stem} {n}.pdf")
+        try:
+            out = open(target, "xb")
+            break
+        except FileExistsError:
+            n += 1
+        except OSError:
+            refuse(f"Impossible d'écrire dans « {folder} » (dossier protégé ou disque en lecture seule).")
+    try:
+        with out, open(final, "rb") as src:
+            shutil.copyfileobj(src, out)
+    except OSError:
+        os.remove(target)
+        refuse(f"Écriture impossible dans « {folder} » (disque plein ?).")
+
+    # File dates: modification first, creation last, because lowering the modification date
+    # below the creation date drags the creation date down with it.
+    subprocess.run(["osascript", "-l", "JavaScript", "-e", """function run(argv) {
   ObjC.import('Foundation');
   const fm = $.NSFileManager.defaultManager;
   const at = (s) =&gt; $.NSDate.dateWithTimeIntervalSince1970(Number(s));
   fm.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(at(argv[1]), 'NSFileModificationDate'), argv[0], null);
   fm.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(at(argv[2]), 'NSFileCreationDate'), argv[0], null);
-}
-JXA
+}""", target, str(modified), str(created)], capture_output=True)
+    st = os.stat(target)
+    if int(getattr(st, "st_birthtime", -1)) != created:
+        notes.append("la date de création du fichier n'a pas pu être recalée")
+    if int(st.st_mtime) != modified:
+        notes.append("la date de modification du fichier n'a pas pu être recalée")
+    if notes:
+        dialog(f"« {os.path.basename(target)} » est créé, mais à vérifier :\n" + "\n".join(notes))
 
-# Read every date back: a refused change must not pass silently.
-missed=""
-[ "$(stat -L -f %B -- "$target")" = "$oldest_b" ] || missed="$missed"$'\n'"création (Finder)"
-[ "$(stat -L -f %m -- "$target")" = "$oldest_m" ] || missed="$missed"$'\n'"modification (Finder)"
-info=$("$QPDF" --show-object=trailer "$target" 2&gt;/dev/null | sed -n 's/.*\/Info \([0-9][0-9]*\) 0 R.*/\1/p')
-infodict=$([ -n "$info" ] &amp;&amp; "$QPDF" --show-object="$info" "$target" 2&gt;/dev/null)
-case "$infodict" in *"/CreationDate ($cdate)"*) ;; *) missed="$missed"$'\n'"création (interne au PDF)" ;; esac
-case "$infodict" in *"/ModDate ($mdate)"*) ;; *) missed="$missed"$'\n'"modification (interne au PDF)" ;; esac
-msg=""
-[ -z "$missed" ] || msg="ces dates n'ont pas pu être recalées :$missed"
-if [ -n "$notes" ]; then
-  [ -z "$msg" ] || msg="$msg"$'\n\n'
-  msg="${msg}à vérifier :$notes"
-fi
-[ -z "$msg" ] || warn "« $(basename "$target") » est créé, mais $msg"
-exit 0
+
+files = sys.argv[1:]
+if files:
+    work = tempfile.mkdtemp()
+    try:
+        run(files, work)
+    except Refused as e:
+        dialog(f"{e}\n\nAucun PDF créé.")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+PY
 </string>
 					<key>CheckedForUserDefaultShell</key>
 					<true/>

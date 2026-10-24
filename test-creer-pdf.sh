@@ -1,483 +1,252 @@
 #!/bin/bash
-# Self-check of the "Créer un PDF" Quick Action on this Mac. It builds throwaway PDFs and
-# images in a temporary folder, runs the workflow's own script on them with the same bare
-# PATH as the Finder, and prints one line per check. Nothing outside that folder is
-# touched; the action's dialogs are logged instead of shown.
-# Run: bash services/test-creer-pdf.sh, then send back everything it prints.
-set -u
+# Self-test of the "Créer un PDF" Quick Action on this Mac. It builds throwaway PDFs and
+# images in a temporary folder, runs the workflow's own script on them with the Finder's
+# bare PATH, and prints one line per check. Nothing outside that folder is touched; the
+# action's dialogs are logged instead of shown.
+# Run: bash ~/Developer/scripts/services/test-creer-pdf.sh, then send back what it prints.
 HERE=$(cd "$(dirname "$0")" && pwd)
-WF="$HERE/Créer un PDF.workflow/Contents/document.wflow"
-QPDF=/opt/homebrew/bin/qpdf
-IMG2PDF=/opt/homebrew/bin/img2pdf
-EXIFTOOL=/opt/homebrew/bin/exiftool
+PY=$(sed -n '1s/^#! *//p' /opt/homebrew/bin/img2pdf 2>/dev/null)
+[ -x "$PY" ] || { echo "img2pdf introuvable : lance d'abord maj"; exit 1; }
 T=$(mktemp -d)
-IN="$T/in"
-mkdir -p "$IN" "$T/bin" "$T/tmp"
-okn=0
-kon=0
-ok() { echo "OK     $1"; okn=$((okn + 1)); }
-ko() { echo "ÉCHEC  $1"; kon=$((kon + 1)); }
-skn=0
-note() { echo "INFO   $1"; case "$1" in *sauté*) skn=$((skn + 1)) ;; esac; }
-have() { # FILE... : true when every fixture exists, else says which one is missing
-  local x
-  for x in "$@"; do [ -s "$x" ] || { note "essai sauté, fichier d'essai non fabriqué : $(basename "$x")"; return 1; }; done
-}
-
-for t in "$QPDF" "$IMG2PDF"; do
-  [ -x "$t" ] || { echo "Manque $t : lance d'abord maj"; exit 1; }
-done
-# img2pdf's own Python has Pillow: it draws the test pictures.
-PY=$(head -n 1 "$IMG2PDF" | sed 's/^#! *//')
-"$PY" -c "import PIL" 2>/dev/null || { echo "Python d'img2pdf introuvable ($PY)."; exit 1; }
-
-plutil -extract actions.0.action.ActionParameters.COMMAND_STRING raw -o "$T/run.sh" "$WF" ||
-  { echo "Impossible d'extraire le script du workflow."; exit 1; }
-
-# Stand-in osascript: dialogs go to a log, the date-setting JXA goes to the real one.
+trap 'chmod -R u+w "$T"; rm -rf "$T"' EXIT
+mkdir "$T/bin"
+plutil -extract actions.0.action.ActionParameters.COMMAND_STRING raw -o "$T/action.sh" \
+  "$HERE/Créer un PDF.workflow/Contents/document.wflow" || { echo "Script du workflow illisible."; exit 1; }
+# Stand-in osascript: dialogs go to a log, the date-setting JavaScript goes to the real one.
 cat >"$T/bin/osascript" <<'EOF'
 #!/bin/bash
-if [ "$1" = "-l" ]; then exec /usr/bin/osascript "$@"; fi
-cat >/dev/null
-printf '%s\n' "$2" >>"$DIALOGS"
+[ "$1" = "-l" ] && exec /usr/bin/osascript "$@"
+printf '%s\n' "${@: -1}" >>"$DIALOG_LOG"
 EOF
 chmod +x "$T/bin/osascript"
+"$PY" -I - "$T" <<'PY'
+import hashlib, io, os, struct, subprocess, sys, time, zlib
+from datetime import datetime, timezone
+import pikepdf
+from PIL import Image, ImageCms, ImageOps
 
-# run LOGNAME FILE... : runs the action like the Finder does, dialogs logged to $T/LOGNAME.log
-run() {
-  local log="$T/$1.log"
-  shift
-  : >"$log"
-  # The Finder hands a Quick Action no locale: the Terminal's is removed too.
-  # XQPDF=FILE run ... : the action uses that qpdf instead. TMPDIR is checked empty at the end.
-  env -u LANG -u LC_ALL -u LC_CTYPE ${XQPDF:+"QPDF=$XQPDF"} TMPDIR="$T/tmp" DIALOGS="$log" \
-    PATH="$T/bin:${FINDER_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" /bin/bash "$T/run.sh" "$@"
-  echo $? >"${log%.log}.rc"
-}
-said() { tr '\n' ' ' <"$T/$1.log"; }
+T = sys.argv[1]
+oks = kos = 0
 
-# pages PDF : one line per page, "pageobject imageobject WxH" ("- none" without image)
-pages() {
-  "$QPDF" --show-pages --with-images "$1" | awk '
-    /^page /{ if (p) print p, img, dim; p=$3; img="-"; dim="none"; next }
-    / [0-9]+ 0 R, [0-9]+ x [0-9]+$/ && img=="-" { img=$2; d=$0; sub(/.*R, /,"",d); gsub(/ /,"",d); dim=d }
-    END { if (p) print p, img, dim }'
-}
-dims() { pages "$1" | awk '{printf "%s ", $3}'; }
-# samepage SRC OUT : every content stream of SRC's pages (at least 2) is in OUT, byte for byte
-samepage() {
-  local k o found c=0
-  for k in $("$QPDF" --show-pages "$1" | awk '/^ *[0-9]+ 0 R$/{print $1}'); do
-    c=$((c + 1))
-    "$QPDF" --show-object="$k" --raw-stream-data "$1" >"$T/s.bin" 2>/dev/null
-    found=0
-    for o in $("$QPDF" --show-pages "$2" 2>/dev/null | awk '/^ *[0-9]+ 0 R$/{print $1}'); do
-      "$QPDF" --show-object="$o" --raw-stream-data "$2" 2>/dev/null | cmp -s - "$T/s.bin" && { found=1; break; }
-    done
-    [ "$found" -eq 1 ] || return 1
-  done
-  [ "$c" -ge 2 ]
-}
-# jpegsame PDF JPEG : the first page's image is the JPEG file, byte for byte
-jpegsame() {
-  local k
-  k=$(pages "$1" 2>/dev/null | awk 'NR==1{print $2}')
-  [ -n "$k" ] && [ "$k" != "-" ] && "$QPDF" --show-object="$k" --raw-stream-data "$1" 2>/dev/null | cmp -s - "$2"
-}
-# mbox PDF : width and height of the first page, in whole points
-mbox() {
-  "$QPDF" --show-object="$(pages "$1" | awk 'NR==1{print $1}')" "$1" |
-    sed -n 's/.*\/MediaBox *\[ *[-0-9.]* *[-0-9.]* *\([-0-9.]*\) *\([-0-9.]*\) *\].*/\1 \2/p' |
-    LC_ALL=C awk '{printf "%d %d", $1 + 0.5, $2 + 0.5}' # macOS awk reads "146.94" as 146 in a French locale
-}
-# upright PDF : "portrait" or "paysage", as the first page is displayed (image size + /Rotate)
-upright() {
-  local line w h rot
-  line=$(pages "$1" | head -n 1)
-  w=$(echo "$line" | awk '{split($3,a,"x"); print a[1]}')
-  h=$(echo "$line" | awk '{split($3,a,"x"); print a[2]}')
-  rot=$("$QPDF" --show-object="$(echo "$line" | awk '{print $1}')" "$1" | sed -n 's/.*\/Rotate \(-*[0-9]*\).*/\1/p')
-  case "${rot:-0}" in 90 | 270 | -90 | -270) local x=$w; w=$h; h=$x ;; esac
-  [ "$h" -gt "$w" ] && echo portrait || echo paysage
-}
 
-# --- Fixtures ------------------------------------------------------------------------------
-# A crash here would only show as skipped checks: it is reported as a failure.
-"$PY" - "$IN" "$T" 2>"$T/fixtures.err" <<'PYEOF' || ko "fabrication des fichiers d'essai interrompue : $(tail -n 1 "$T/fixtures.err")"
-import sys
-from PIL import Image, ImageDraw
-d, t = sys.argv[1], sys.argv[2]
-def pic(w, h, mode="RGB"):
-    im = Image.new(mode, (w, h), (40, 110, 200) if mode == "RGB" else (40, 110, 200, 128))
-    ImageDraw.Draw(im).rectangle((0, 0, w // 4, h // 4), fill=(230, 60, 40) if mode == "RGB" else (230, 60, 40, 255))
+def check(cond, label):
+    global oks, kos
+    print(("OK     " if cond else "ÉCHEC  ") + label)
+    oks, kos = oks + bool(cond), kos + (not cond)
+
+
+def setdates(path, birth, mtime):
+    os.utime(path, (mtime, mtime))
+    subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-e", """function run(a) { ObjC.import('Foundation');
+      $.NSFileManager.defaultManager.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(
+      $.NSDate.dateWithTimeIntervalSince1970(Number(a[1])), 'NSFileCreationDate'), a[0], null); }""",
+                    path, str(birth)], capture_output=True)
+
+
+def ts(s):
+    return int(datetime.fromisoformat(s).timestamp())
+
+
+def pattern(w=60, h=40, alpha=False):
+    """Four colored quarters (to see a turn or a mirror) with fine noise (to see any loss)."""
+    im = Image.new("RGBA" if alpha else "RGB", (w, h))
+    for y in range(h):
+        for x in range(w):
+            q = [(220, 30, 30), (30, 200, 30), (30, 30, 220), (230, 220, 30)][(y >= h // 2) * 2 + (x >= w // 2)]
+            px = tuple((c + (x * 7 + y * 13) % 9) % 256 for c in q)
+            im.putpixel((x, y), px + ((x * 5 + y * 3) % 256,) if alpha else px)
     return im
-def exif(o):
-    e = Image.Exif(); e[274] = o; return e
-pic(600, 400).save(f"{t}/p1.png"); pic(610, 400).save(f"{t}/p2.png"); pic(620, 400).save(f"{t}/p3.png")
-pic(630, 420).save(f"{d}/photo.jpg", quality=92, exif=exif(6))            # portrait phone photo
-pic(650, 400).save(f"{d}/scan.tif", save_all=True, append_images=[pic(660, 400)], compression="tiff_lzw")
-pic(670, 400, "RGBA").save(f"{d}/alpha.png")                              # real transparency
-pic(680, 400).save(f"{d}/anim.gif", save_all=True, append_images=[pic(680, 400).rotate(180)], duration=200)
-pic(690, 400).save(f"{d}/w.webp", lossless=True)
-pic(60, 40).save(f"{d}/portrait.tif", tiffinfo={274: 6})                  # TIFF stored landscape, tag 6
-pic(70, 40).save(f"{d}/miroir.jpg", exif=exif(5))                          # mirrored orientation
-pic(80, 40).save(f"{t}/heicsrc.jpg", exif=exif(6))
-Image.new("I;16", (50, 30), 30000).save(f"{d}/png16.png")                 # 16-bit PNG: kept as is
-Image.new("I;16", (50, 30), 30000).save(f"{d}/gris16.tif")                # 16-bit TIFF: kept or refused
-pg = [Image.new("I;16", (50, 30), v) for v in (1000, 40000)]
-pg[0].save(f"{d}/multi16.tif", save_all=True, append_images=pg[1:])       # 2 pages of 16 bits: refused
-# Small palettes with a transparent color, like a logo or an icon (img2pdf mislabels their mask).
-pal = Image.new("P", (40, 30), 1)
-pal.putpalette([255, 0, 0, 0, 0, 255, 0, 160, 0, 250, 220, 0])
-dp = ImageDraw.Draw(pal)
-dp.rectangle((0, 0, 9, 9), fill=0); dp.rectangle((20, 0, 29, 9), fill=2); dp.rectangle((0, 20, 9, 29), fill=3)
-pal.save(f"{d}/pal4.png", transparency=0, dpi=(150, 150)); pal.save(f"{d}/pal4.gif", transparency=0)
-Image.new("I;16", (80, 48), 30000).save(f"{d}/gris16-6.tif", tiffinfo={274: 6}, dpi=(200, 100))  # 16 bits, turned
-# A PDF page drawn by two content streams, one uncompressed and one in ASCII85, with no xref table.
-import base64
-s1 = b"0 0 1 rg 10 10 80 80 re f\n"
-s2 = base64.a85encode(b"1 0 0 rg 40 40 20 20 re f\n") + b"~>"
-def obj(n, body):
-    return b"%d 0 obj" % n + body + b"endobj\n"
-def stream(n, data, extra=b""):
-    return obj(n, b"<</Length %d%s>>stream\n" % (len(data), extra) + data + b"\nendstream ")
-raw = (b"%PDF-1.4\n" + obj(1, b"<</Type/Catalog/Pages 2 0 R>>") + obj(2, b"<</Type/Pages/Kids[3 0 R]/Count 1>>")
-       + obj(3, b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Contents[4 0 R 5 0 R]>>")
-       + stream(4, s1) + stream(5, s2, b"/Filter/ASCII85Decode") + b"trailer<</Root 1 0 R/Size 6>>\n%EOF\n")
-open(f"{d}/abime.pdf", "wb").write(raw)                                   # damaged: no xref, qpdf repairs it
-PYEOF
-cp "$IN/portrait.tif" "$IN/portrait2.Tiff"                                  # odd case extension
-# PDFs written by hand, then rebuilt by qpdf: one with a layer, one with a signature field.
-pdfraw() { # FILE CATALOG_EXTRA PAGE_EXTRA OBJ4
-  printf '%%PDF-1.5\n1 0 obj<</Type/Catalog/Pages 2 0 R%s>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]%s>>endobj\n4 0 obj%s endobj\ntrailer<</Root 1 0 R/Size 5>>\n%%%%EOF\n' "$2" "$3" "$4" >"$T/raw.pdf"
-  "$QPDF" "$T/raw.pdf" "$1" 2>/dev/null
-}
-pdfraw "$IN/calques.pdf" "/OCProperties<</OCGs[4 0 R]/D<</Order[4 0 R]/OFF[4 0 R]>>>>" "" "<</Type/OCG/Name(Calque)>>"
-pdfraw "$IN/signe.pdf" "/AcroForm<</Fields[4 0 R]/SigFlags 3>>" "/Annots[4 0 R]" "<</Type/Annot/Subtype/Widget/FT/Sig/T(Signature1)/Rect[0 0 50 20]/P 3 0 R>>"
-"$IMG2PDF" -o "$IN/Facture d'été.pdf" "$T/p1.png" "$T/p2.png" 2>/dev/null # 2 pages
-"$IMG2PDF" -o "$T/b0.pdf" "$T/p3.png" 2>/dev/null
-"$QPDF" --object-streams=generate "$T/b0.pdf" "$IN/b.pdf"                  # 1 page, object streams
-sips -s format heic "$T/heicsrc.jpg" --out "$IN/iphone.heic" >/dev/null 2>&1
-[ -s "$IN/iphone.heic" ] && cp "$IN/iphone.heic" "$IN/vrai-heic.jpg"     # a HEIC misnamed .jpg
-"$QPDF" --encrypt secret secret 256 -- "$IN/b.pdf" "$IN/verrou.pdf"
-printf '<?xml version="1.0"?><Invoice/>' >"$T/factur-x.xml"
-"$QPDF" --add-attachment "$T/factur-x.xml" -- "$IN/b.pdf" "$IN/facture.pdf"
-cp "$IN/b.pdf" "$IN/b-sans-extension"                                       # a PDF without .pdf
-cp "$IN/b.pdf" "$IN/relevé.2025.10.pdf"                                     # dots inside the name
-cp "$IN/photo.jpg" "$IN/APPAREIL.JPG"                                       # a camera's upper case name
-cp "$IN/photo.jpg" "$IN/photo-sans-extension"                               # a JPEG without extension
-cp "$IN/scan.tif" "$IN/SCAN2.TIF"                                           # 2-page scan, upper case name
-"$QPDF" --stream-data=preserve "$IN/abime.pdf" "$IN/brut.pdf" 2>/dev/null  # same page, repaired, streams kept
 
-# Dates as in the request: the first file at 11:05, the others at 11:06, one older creation.
-for f in "$IN"/*; do touch -t 202510041106 "$f"; done
-touch -t 202510041105 "$IN/Facture d'été.pdf"
-touch -t 202001011200 "$IN/alpha.png" && touch -t 202510041107 "$IN/alpha.png"
-# A copied file: created after its last modification (birth 2025-06-01, modified 2024-01-01).
-cp "$IN/b.pdf" "$IN/copie.pdf"
-/usr/bin/osascript -l JavaScript - "$IN/copie.pdf" 1704106800 1748772000 <<'JXA' >/dev/null 2>&1
-function run(argv) {
-  ObjC.import('Foundation');
-  const fm = $.NSFileManager.defaultManager;
-  const at = (s) => $.NSDate.dateWithTimeIntervalSince1970(Number(s));
-  fm.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(at(argv[1]), 'NSFileModificationDate'), argv[0], null);
-  fm.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(at(argv[2]), 'NSFileCreationDate'), argv[0], null);
-}
-JXA
-ls "$IN" >"$T/names"
-sums() { while IFS= read -r n; do printf '%s %s %s %s\n' "$(cksum <"$IN/$n")" "$(stat -f %m "$IN/$n")" "$(stat -f %B "$IN/$n")" "$n"; done <"$T/names"; }
-before=$(sums)
 
-# --- Case 1: the full mix, accented first name ------------------------------------------------
-if have "$IN/Facture d'été.pdf" "$IN/photo.jpg" "$IN/b.pdf" "$IN/scan.tif" "$IN/alpha.png" "$IN/anim.gif" "$IN/w.webp"; then
-  set -- "$IN/Facture d'été.pdf" "$IN/photo.jpg" "$IN/b.pdf" "$IN/scan.tif" "$IN/alpha.png" "$IN/anim.gif" "$IN/w.webp"
-  run mix "$@"
-  out="$IN/Facture d'été 2.pdf"
-  if [ -f "$out" ]; then
-    ok "PDF créé avec le nom attendu : $(basename "$out")"
-    want="600x400 610x400 630x420 620x400 650x400 660x400 670x400 680x400 690x400 "
-    got=$(dims "$out")
-    [ "$got" = "$want" ] && ok "pages dans l'ordre de la sélection, une seule page pour le GIF animé ($("$QPDF" --show-npages "$out") pages)" ||
-      ko "ordre ou nombre de pages : attendu [$want], obtenu [$got]"
-    jimg=$(pages "$out" | awk 'NR==3{print $2}')
-    "$QPDF" --show-object="$jimg" --raw-stream-data "$out" | cmp -s - "$IN/photo.jpg" &&
-      ok "photo JPEG insérée octet pour octet" || ko "photo JPEG réencodée"
-    # Every stream of the source PDF page (image and drawing instructions) must be identical.
-    same=1
-    for k in $("$QPDF" --show-pages "$IN/b.pdf" | awk '/^ *[0-9]+ 0 R$/{print $1}') $(pages "$IN/b.pdf" | awk '{print $2}'); do
-      "$QPDF" --show-object="$k" --raw-stream-data "$IN/b.pdf" >"$T/s.bin" 2>/dev/null
-      found=0
-      for o in $("$QPDF" --show-pages "$out" | awk '/^ *[0-9]+ 0 R$/{print $1}') $(pages "$out" | awk '{print $2}'); do
-        [ "$o" = "-" ] && continue
-        "$QPDF" --show-object="$o" --raw-stream-data "$out" 2>/dev/null | cmp -s - "$T/s.bin" && { found=1; break; }
-      done
-      [ "$found" -eq 1 ] || same=0
-    done
-    [ "$same" -eq 1 ] && ok "page de PDF recopiée octet pour octet (image et dessin)" || ko "page de PDF modifiée"
-    jp=$(pages "$out" | awk 'NR==3{print $1}')
-    "$QPDF" --show-object="$jp" "$out" | grep -q '/Rotate 90' && ok "photo JPEG en portrait redressée (/Rotate 90)" ||
-      ko "photo JPEG en portrait non redressée"
+def make_pdf(path, labels, info=None):
+    pdf = pikepdf.new()
+    for lab in labels:
+        pdf.add_blank_page(page_size=(200, 100))
+        pdf.pages[-1].Contents = pdf.make_stream(f"% {lab}\n0 0 m 150 80 l S\n".encode())
+    if info:
+        for k, v in info.items():
+            pdf.docinfo[k] = v
+    pdf.save(path)
 
-    minb=""
-    minm=""
-    for f in "$@"; do
-      b=$(stat -f %B "$f")
-      m=$(stat -f %m "$f")
-      { [ -z "$minb" ] || [ "$b" -lt "$minb" ]; } && minb=$b
-      { [ -z "$minm" ] || [ "$m" -lt "$minm" ]; } && minm=$m
-    done
-    fmt() { date -r "$1" "+%d/%m/%Y %H:%M:%S"; }
-    [ "$(stat -f %m "$out")" = "$minm" ] && ok "date de modification = la plus ancienne ($(fmt "$minm"))" ||
-      ko "date de modification $(fmt "$(stat -f %m "$out")") au lieu de $(fmt "$minm")"
-    [ "$(stat -f %B "$out")" = "$minb" ] && ok "date de création = la plus ancienne ($(fmt "$minb"))" ||
-      ko "date de création $(fmt "$(stat -f %B "$out")") au lieu de $(fmt "$minb")"
-    info=$("$QPDF" --show-object=trailer "$out" | sed -n 's/.*\/Info \([0-9][0-9]*\) 0 R.*/\1/p')
-    idict=$("$QPDF" --show-object="$info" "$out" 2>/dev/null)
-    # Expected dates computed by Python, time zone included, not by the action's own formula.
-    pdfd() { "$PY" -c "import datetime,sys; s=datetime.datetime.fromtimestamp(int(sys.argv[1])).astimezone().strftime('%Y%m%d%H%M%S%z'); print('D:'+s[:17]+chr(39)+s[17:]+chr(39))" "$1"; }
-    case "$idict" in *"/CreationDate ($(pdfd "$minb"))"*) ok "date de création interne au PDF, fuseau compris ($(pdfd "$minb"))" ;; *) ko "date de création interne : $idict" ;; esac
-    case "$idict" in *"/ModDate ($(pdfd "$minm"))"*) ok "date de modification interne au PDF, fuseau compris" ;; *) ko "date de modification interne : $idict" ;; esac
-    [ -s "$T/mix.log" ] && ko "message affiché : $(said mix)" || ok "aucun message d'alerte"
-    "$QPDF" --check "$out" >/dev/null 2>&1 && ok "qpdf --check : PDF sain" || ko "qpdf --check signale un problème"
-  else
-    ko "aucun PDF créé ; message : $(said mix)"
-  fi
-fi
 
-# --- Case 2: same selection again, name already taken ------------------------------------------
-run again "$IN/Facture d'été.pdf" "$IN/b.pdf"
-[ -f "$IN/Facture d'été 3.pdf" ] && ok "deuxième passage : « Facture d'été 3.pdf », rien d'écrasé" ||
-  ko "deuxième passage : « Facture d'été 3.pdf » absent ; message : $(said again)"
+def run(*files):
+    log = os.path.join(T, "dialogs.txt")
+    open(log, "w").close()
+    folder = os.path.dirname(files[0])
+    before = set(os.listdir(folder))
+    t0 = time.time()
+    subprocess.run(["/bin/bash", os.path.join(T, "action.sh"), *files], capture_output=True,
+                   env={"PATH": f"{T}/bin:/usr/bin:/bin:/usr/sbin:/sbin", "DIALOG_LOG": log, "HOME": os.environ["HOME"]})
+    new = sorted(set(os.listdir(folder)) - before)
+    return [os.path.join(folder, n) for n in new], open(log).read(), time.time() - t0
 
-# --- Case 3: reversed order ---------------------------------------------------------------------
-run reverse "$IN/b.pdf" "$IN/Facture d'été.pdf"
-got=$(dims "$IN/b 2.pdf" 2>/dev/null)
-[ "$got" = "620x400 600x400 610x400 " ] && ok "ordre inversé respecté" || ko "ordre inversé : obtenu [$got] ; message : $(said reverse)"
-# The oldest dates come from the second file here, not the first.
-m1=$(stat -f %m "$IN/b.pdf"); m2=$(stat -f %m "$IN/Facture d'été.pdf"); [ "$m2" -lt "$m1" ] && m1=$m2
-b1=$(stat -f %B "$IN/b.pdf"); b2=$(stat -f %B "$IN/Facture d'été.pdf"); [ "$b2" -lt "$b1" ] && b1=$b2
-[ "$(stat -f %m "$IN/b 2.pdf" 2>/dev/null)" = "$m1" ] && [ "$(stat -f %B "$IN/b 2.pdf" 2>/dev/null)" = "$b1" ] &&
-  ok "ordre inversé : dates les plus anciennes prises au second fichier" || ko "ordre inversé : dates du PDF fausses"
-[ "$(cat "$T/reverse.rc")" = 0 ] && [ "$(cat "$T/mix.rc" 2>/dev/null)" = 0 ] && ok "fin sans erreur après un succès (code 0)" ||
-  ko "code de sortie $(cat "$T/reverse.rc") après un succès : Automator afficherait une erreur"
-run dots "$IN/relevé.2025.10.pdf"
-[ -f "$IN/relevé.2025.10 2.pdf" ] && ok "nom à plusieurs points : « relevé.2025.10 2.pdf »" || ko "nom à plusieurs points : $(ls "$IN" | grep '^relevé' | tr '\n' ' ')"
 
-# --- Case 4: orientation, displayed upright exactly once -----------------------------------------
-if have "$IN/portrait.tif"; then
-  run tif "$IN/portrait.tif"
-  [ -f "$IN/portrait.pdf" ] && [ "$(upright "$IN/portrait.pdf")" = portrait ] && ok "TIFF en portrait affiché droit" ||
-    ko "TIFF en portrait affiché couché ou absent ; message : $(said tif)"
-fi
-if have "$IN/portrait2.Tiff"; then
-  run tif2 "$IN/portrait2.Tiff"
-  [ -f "$IN/portrait2.pdf" ] && [ "$(upright "$IN/portrait2.pdf")" = portrait ] && ok "TIFF nommé .Tiff : affiché droit aussi" ||
-    ko "TIFF nommé .Tiff affiché couché ou absent ; message : $(said tif2)"
-fi
-# Transparent small-palette PNG and GIF: decode each page and its
-# transparency mask back and compare them, pixel by pixel, with the source.
-if have "$IN/pal4.png" "$IN/pal4.gif"; then
-  run pal "$IN/pal4.png" "$IN/pal4.gif"
-  n=0
-  for src in pal4.png pal4.gif; do
-    n=$((n + 1))
-    k=$(pages "$IN/pal4.pdf" 2>/dev/null | awk -v n=$n 'NR==n{print $2}')
-    r="aucune page"
-    if [ -n "$k" ] && [ "$k" != "-" ]; then
-      "$QPDF" --show-object="$k" "$IN/pal4.pdf" >"$T/pal.dict"
-      "$QPDF" --show-object="$k" --filtered-stream-data "$IN/pal4.pdf" >"$T/pal.bin" 2>/dev/null
-      m=$(sed -n 's/.*\/SMask \([0-9]*\) 0 R.*/\1/p' "$T/pal.dict")
-      : >"$T/palm.dict"
-      : >"$T/palm.bin"
-      if [ -n "$m" ]; then
-        "$QPDF" --show-object="$m" "$IN/pal4.pdf" >"$T/palm.dict"
-        "$QPDF" --show-object="$m" --filtered-stream-data "$IN/pal4.pdf" >"$T/palm.bin" 2>/dev/null
-      fi
-      r=$("$PY" -W ignore - "$IN/$src" "$T/pal.dict" "$T/pal.bin" "$T/palm.dict" "$T/palm.bin" <<'PYEOF'
-import re, sys
-from PIL import Image
-src, d, b, md, mb = sys.argv[1], open(sys.argv[2]).read(), open(sys.argv[3], "rb").read(), open(sys.argv[4]).read(), open(sys.argv[5], "rb").read()
-want = Image.open(src).convert("RGBA")
-w, h = want.size
-if not md:
-    print("transparence perdue"); sys.exit()
-if "/DeviceRGB" not in d or "/BitsPerComponent 8" not in d or "/BitsPerComponent 8" not in md or len(b) != w * h * 3 or len(mb) != w * h:
-    print("image ou masque inattendu (%s, %s)" % (" ".join(re.findall(r"/(?:ColorSpace|BitsPerComponent) \S+", d)), " ".join(re.findall(r"/BitsPerComponent \S+", md))))
-    sys.exit()
-got = Image.frombytes("RGB", (w, h), b)
-got.putalpha(Image.frombytes("L", (w, h), mb))
-# A fully transparent pixel shows nothing: its color does not count.
-print(sum(1 for p, q in zip(got.getdata(), want.getdata()) if p != q and (p[3] or q[3])))
-PYEOF
-)
-    fi
-    [ "$r" = 0 ] && ok "transparence de $src gardée, identique pixel pour pixel" || ko "transparence de $src : $r ; message : $(said pal)"
-  done
-  # 40x30 px at 150 dpi: 19.2x14.4 points.
-  [ "$(mbox "$IN/pal4.pdf" 2>/dev/null)" = "19 14" ] && ok "image à palette : résolution gardée" ||
-    ko "image à palette : page de $(mbox "$IN/pal4.pdf" 2>/dev/null) points au lieu de 19 14"
-fi
-if [ -s "$IN/iphone.heic" ]; then
-  o=""
-  [ -x "$EXIFTOOL" ] && o=$("$EXIFTOOL" -s3 -n -Orientation "$IN/iphone.heic" 2>/dev/null)
-  if [ "$o" = "6" ]; then
-    run heic "$IN/iphone.heic"
-    [ -f "$IN/iphone.pdf" ] && [ "$(upright "$IN/iphone.pdf")" = portrait ] && ok "HEIC en portrait affiché droit" ||
-      ko "HEIC en portrait affiché couché ou absent ; message : $(said heic)"
-  else
-    note "essai HEIC en portrait sauté : le HEIC d'essai n'a pas gardé son orientation (${o:-illisible})"
-  fi
-  run misnamed "$IN/vrai-heic.jpg"
-  [ -f "$IN/vrai-heic.pdf" ] && ok "HEIC nommé .jpg : converti quand même" || ko "HEIC nommé .jpg : $(said misnamed)"
-else
-  note "sips ne sait pas écrire de HEIC ici : essais HEIC sautés"
-fi
-if have "$IN/miroir.jpg"; then
-  run mirror "$IN/miroir.jpg"
-  grep -q "miroir" "$T/mirror.log" && ok "orientation en miroir signalée" || ko "orientation en miroir non signalée : $(said mirror)"
-fi
+def page_image(page):
+    x = list(page.get_images(recursive=False).values())[0]
+    im = pikepdf.PdfImage(x).as_pil_image()
+    if "/SMask" in x and im.mode not in ("RGBA", "LA"):
+        im = im.convert("RGBA")
+        im.putalpha(pikepdf.PdfImage(x.SMask).as_pil_image().convert("L"))
+    rot = int(page.obj.get("/Rotate", 0)) % 360
+    turn = {90: Image.Transpose.ROTATE_270, 180: Image.Transpose.ROTATE_180, 270: Image.Transpose.ROTATE_90}
+    return (im.transpose(turn[rot]) if rot else im), x, rot
 
-# --- Case 5: refusals -------------------------------------------------------------------------
-# A 16-bit TIFF either keeps its 16 bits (macOS rewrites it as a 16-bit PNG) or is refused:
-# a PDF with fewer bits would be a silent loss.
-if have "$IN/gris16.tif"; then
-  run deep "$IN/gris16.tif" "$IN/b.pdf"
-  k=$(pages "$IN/gris16.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-  if [ -n "$k" ]; then
-    "$QPDF" --show-object="$k" "$IN/gris16.pdf" | grep -q "/BitsPerComponent 16" && ok "TIFF 16 bits gardé en 16 bits" ||
-      ko "TIFF 16 bits réduit en silence : $("$QPDF" --show-object="$k" "$IN/gris16.pdf" | grep -o '/BitsPerComponent [0-9]*')"
-  else
-    grep -q "8 bits" "$T/deep.log" && ok "TIFF 16 bits refusé avec un message, aucun PDF (macOS ne l'a pas gardé en 16 bits)" ||
-      ko "TIFF 16 bits : $(said deep)"
-  fi
-fi
-if have "$IN/multi16.tif"; then
-  run multi16 "$IN/multi16.tif"
-  [ ! -e "$IN/multi16.pdf" ] && grep -q "8 bits" "$T/multi16.log" && ok "TIFF 16 bits de 2 pages refusé avec un message, aucun PDF" ||
-    ko "TIFF 16 bits de 2 pages : $(said multi16)"
-fi
-if have "$IN/png16.png"; then
-  run png16 "$IN/png16.png"
-  k=$(pages "$IN/png16.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-  [ -n "$k" ] && "$QPDF" --show-object="$k" "$IN/png16.pdf" | grep -q "/BitsPerComponent 16" && ok "PNG 16 bits gardé en 16 bits" ||
-    ko "PNG 16 bits : $(said png16)"
-fi
-run locked "$IN/verrou.pdf" "$IN/b.pdf"
-[ ! -e "$IN/verrou 2.pdf" ] && grep -q "mot de passe" "$T/locked.log" && ok "PDF protégé : refusé avec un message, aucun PDF" ||
-  ko "PDF protégé : $(said locked)"
 
-# --- Case 6: PDF with an attached file (Factur-X invoice) ----------------------------------------
-run attach "$IN/facture.pdf" "$IN/b.pdf"
-[ -f "$IN/facture 2.pdf" ] && grep -q "Factur-X" "$T/attach.log" && ok "pièce jointe : PDF créé et alerte « garde l'original »" ||
-  ko "pièce jointe : $(said attach)"
+def same(a, b):
+    mode = "RGBA" if "A" in a.mode + b.mode or "transparency" in b.info else "RGB"
+    return a.size == b.size and a.convert(mode).tobytes() == b.convert(mode).tobytes()
 
-# --- Case 7: layers, signature, PDF without extension, file created after its modification ------
-if have "$IN/calques.pdf"; then
-  run layers "$IN/calques.pdf" "$IN/b.pdf"
-  [ -f "$IN/calques 2.pdf" ] && grep -q "calques" "$T/layers.log" && ok "calques : PDF créé et alerte" || ko "calques : $(said layers)"
-fi
-if have "$IN/signe.pdf"; then
-  run sig "$IN/signe.pdf" "$IN/b.pdf"
-  [ -f "$IN/signe 2.pdf" ] && grep -q "signature" "$T/sig.log" && ok "signature électronique : PDF créé et alerte" || ko "signature : $(said sig)"
-fi
-run noext "$IN/b-sans-extension"
-[ "$("$QPDF" --show-npages "$IN/b-sans-extension.pdf" 2>/dev/null)" = 1 ] && ok "PDF sans extension .pdf : repris comme PDF" ||
-  ko "PDF sans extension : $(said noext)"
-if have "$IN/brut.pdf"; then
-  run brut "$IN/brut.pdf"
-  samepage "$IN/brut.pdf" "$IN/brut 2.pdf" && ok "flux non compressé et flux ASCII85 recopiés octet pour octet" ||
-    ko "flux non compressé ou ASCII85 réécrit ; message : $(said brut)"
-fi
-if have "$IN/abime.pdf"; then
-  run abime "$IN/abime.pdf" "$IN/b.pdf"
-  [ "$("$QPDF" --show-npages "$IN/abime 2.pdf" 2>/dev/null)" = 2 ] && ok "PDF légèrement abîmé : réparé et repris" ||
-    ko "PDF légèrement abîmé : $(said abime)"
-fi
-run upper "$IN/APPAREIL.JPG"
-jpegsame "$IN/APPAREIL.pdf" "$IN/photo.jpg" && ok "photo nommée .JPG en majuscules : insérée octet pour octet" ||
-  ko "photo nommée .JPG : réencodée ou absente ; message : $(said upper)"
-run noextjpg "$IN/photo-sans-extension"
-jpegsame "$IN/photo-sans-extension.pdf" "$IN/photo.jpg" && ok "photo JPEG sans extension : insérée octet pour octet" ||
-  ko "photo JPEG sans extension : réencodée ou absente ; message : $(said noextjpg)"
-if have "$IN/SCAN2.TIF"; then
-  run scan2 "$IN/SCAN2.TIF"
-  [ "$("$QPDF" --show-npages "$IN/SCAN2.pdf" 2>/dev/null)" = 2 ] && ok "scan TIFF de 2 pages nommé .TIF en majuscules : 2 pages" ||
-    ko "scan .TIF de 2 pages : $("$QPDF" --show-npages "$IN/SCAN2.pdf" 2>/dev/null) page(s) ; message : $(said scan2)"
-fi
-for x in gris16-6; do
-  if have "$IN/$x.tif"; then
-    run "t$x" "$IN/$x.tif"
-    k=$(pages "$IN/$x.pdf" 2>/dev/null | awk 'NR==1{print $2}')
-    if [ -n "$k" ]; then
-      "$QPDF" --show-object="$k" "$IN/$x.pdf" | grep -q "/BitsPerComponent 16" && [ "$(upright "$IN/$x.pdf")" = portrait ] &&
-        ok "TIFF 16 bits en portrait ($x) : gardé en 16 bits et droit" || ko "TIFF 16 bits en portrait ($x) : réduit ou couché"
-    else
-      grep -q "8 bits" "$T/t$x.log" && ok "TIFF 16 bits en portrait ($x) : refusé avec un message (orientation non garantie)" ||
-        ko "TIFF 16 bits en portrait ($x) : $(said t$x)"
-    fi
-  fi
-done
-# A folder where nothing can be written (a shared or locked folder): refused with a message.
-mkdir -p "$T/protege" && cp "$IN/b.pdf" "$T/protege/b.pdf" && chmod 555 "$T/protege"
-run ro "$T/protege/b.pdf"
-[ ! -e "$T/protege/b 2.pdf" ] && grep -q "Écriture impossible" "$T/ro.log" && ok "dossier protégé en écriture : refusé avec un message" ||
-  ko "dossier protégé en écriture : $(said ro)"
-chmod 755 "$T/protege"
-cb=$(stat -f %B "$IN/copie.pdf")
-cm=$(stat -f %m "$IN/copie.pdf")
-if [ "$cb" -gt "$cm" ]; then
-  run copied "$IN/copie.pdf"
-  [ "$(stat -f %B "$IN/copie 2.pdf" 2>/dev/null)" = "$cb" ] && [ "$(stat -f %m "$IN/copie 2.pdf")" = "$cm" ] && [ ! -s "$T/copied.log" ] &&
-    ok "fichier copié (créé après sa modification) : ses deux dates reprises telles quelles" ||
-    ko "fichier copié : création $(stat -f %B "$IN/copie 2.pdf" 2>/dev/null) au lieu de $cb, modification $(stat -f %m "$IN/copie 2.pdf" 2>/dev/null) au lieu de $cm ; message : $(said copied)"
-else
-  note "essai du fichier copié sauté : macOS n'a pas gardé une création postérieure à la modification"
-fi
 
-# --- The real alert dialog compiles (it is only logged above) ----------------------------------
-if [ -x /usr/bin/osacompile ]; then
-  sed -n "/<<'AS'/,/^AS\$/p" "$T/run.sh" | sed '1d;$d' >"$T/warn.applescript"
-  [ -s "$T/warn.applescript" ] && /usr/bin/osacompile -o "$T/warn.scpt" "$T/warn.applescript" 2>"$T/osa.err" &&
-    ok "message d'alerte : AppleScript valide" || ko "message d'alerte : AppleScript invalide ($(cat "$T/osa.err"))"
-else
-  note "osacompile absent : essai de l'AppleScript du message sauté"
-fi
+def near(a, b):
+    """Lossy formats (HEIC): same size and each quarter of about the same color."""
+    if a.size != b.size:
+        return False
+    a, b = a.convert("RGB").resize((2, 2), Image.Resampling.BOX), b.convert("RGB").resize((2, 2), Image.Resampling.BOX)
+    return all(abs(p - q) < 40 for p, q in zip(a.tobytes(), b.tobytes()))
 
-# --- Guards against a lost page and a double run --------------------------------------------------
-# A qpdf that loses one page on the way: the action must refuse, never deliver a shorter PDF.
-cat >"$T/bin/qpdf-perte" <<QPDFEOF
-#!/bin/bash
-if [ "\$1" = --show-npages ] && [ "\${2##*/}" = final.pdf ]; then echo \$((\$("$QPDF" --show-npages "\$2") - 1)); exit 0; fi
-exec "$QPDF" "\$@"
-QPDFEOF
-chmod +x "$T/bin/qpdf-perte"
-mkdir -p "$T/perte" && cp "$IN/Facture d'été.pdf" "$T/perte/a.pdf"
-XQPDF="$T/bin/qpdf-perte" run lost "$T/perte/a.pdf"
-[ ! -e "$T/perte/a 2.pdf" ] && grep -q "pages se sont perdues" "$T/lost.log" && ok "page perdue en route : refusé avec un message, aucun PDF" ||
-  ko "page perdue en route : $(ls "$T/perte" | tr '\n' ' ') ; message : $(said lost)"
-# The same selection run twice at once: two PDFs, or one PDF and a message, never one silently overwritten.
-mkdir -p "$T/double" && cp "$IN/Facture d'été.pdf" "$T/double/d.pdf" && cp "$IN/b.pdf" "$T/double/e.pdf"
-run twice1 "$T/double/d.pdf" "$T/double/e.pdf" &
-run twice2 "$T/double/d.pdf" "$T/double/e.pdf"
-wait
-made=$(ls "$T/double" | grep -c '^d [0-9]*\.pdf$')
-twice=$(cat "$T/twice1.log" "$T/twice2.log" | grep -c "deux fois")
-[ $((made + twice)) -eq 2 ] && ok "action lancée deux fois en même temps : $made PDF, rien d'écrasé" ||
-  ko "action lancée deux fois en même temps : $made PDF et $twice message(s) pour 2 lancements"
-[ -z "$(ls -A "$T/tmp")" ] && ok "dossiers temporaires de l'action supprimés" || ko "dossiers temporaires laissés : $(ls "$T/tmp" | tr '\n' ' ')"
 
-# --- Originals untouched ------------------------------------------------------------------------
-[ "$(sums)" = "$before" ] &&
-  ok "fichiers d'origine inchangés, dates comprises" || ko "un fichier d'origine a changé"
+def sha(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
-echo
-if [ "$skn" -eq 0 ]; then
-  echo "Bilan : $okn OK, $kon ÉCHEC"
-else
-  echo "Bilan : $okn OK, $kon ÉCHEC, $skn essai(s) sauté(s), voir les lignes INFO"
-fi
-if [ "$kon" -eq 0 ]; then
-  rm -rf "$T"
-else
-  echo "Fichiers d'essai gardés pour examen : $T"
-fi
+
+D = os.path.join(T, "in")
+os.mkdir(D)
+srgb = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+up = pattern()                      # what every photo must look like, upright
+turned = up.transpose(Image.Transpose.ROTATE_90)  # stored on its side, EXIF says turn it back
+
+# --- 1. Everyday mix: PDF, iPhone-like JPEG, screenshot, HEIC, PDF, in click order ---------
+make_pdf(f"{D}/a.pdf", ["A1", "A2"], {"/CreationDate": "D:20200301100000+01'00'"})
+make_pdf(f"{D}/b.pdf", ["B1"], {"/ModDate": "D:20180704120000Z"})
+ex = Image.Exif()
+ex[274] = 6
+ex.get_ifd(0x8769).update({0x9003: "2019:05:12 14:03:22", 0x9011: "+02:00"})
+turned.save(f"{D}/photo.jpg", quality=92, exif=ex, icc_profile=srgb)
+pattern(alpha=True).save(f"{D}/capture.png")
+subprocess.run(["sips", "-s", "format", "heic", f"{D}/photo.jpg", "--out", f"{D}/iphone.heic"], capture_output=True)
+mix = [f"{D}/a.pdf", f"{D}/photo.jpg", f"{D}/capture.png", f"{D}/iphone.heic", f"{D}/b.pdf"]
+for f in mix:
+    setdates(f, ts("2023-01-01T10:00:00"), ts("2024-01-01T10:00:00"))
+setdates(f"{D}/capture.png", ts("2021-06-01T08:00:00"), ts("2024-01-01T10:00:00"))
+hashes = {f: (sha(f), os.stat(f).st_mtime) for f in mix}
+out, dialogs, took = run(*mix)
+check(len(out) == 1 and os.path.basename(out[0]) == "a 2.pdf", f"mélange : un seul PDF, nommé comme chez Apple ({[os.path.basename(o) for o in out]})")
+check(dialogs == "", f"mélange : aucune alerte ({dialogs.strip()[:200]})")
+if out:
+    with pikepdf.open(out[0]) as pdf, pikepdf.open(f"{D}/a.pdf") as a, pikepdf.open(f"{D}/b.pdf") as b:
+        p = pdf.pages
+        check(len(p) == 6, f"mélange : 6 pages ({len(p)})")
+        check(len(p) == 6 and [p[i].Contents.read_raw_bytes() for i in (0, 1, 5)]
+              == [a.pages[0].Contents.read_raw_bytes(), a.pages[1].Contents.read_raw_bytes(), b.pages[0].Contents.read_raw_bytes()],
+              "mélange : pages PDF recopiées à l'octet près, dans l'ordre des clics")
+        im, x, rot = page_image(p[2])
+        check(x.read_raw_bytes() == open(f"{D}/photo.jpg", "rb").read() and rot == 90,
+              "JPEG : recopié à l'octet près, redressé par la page")
+        check(x.ColorSpace[0] == "/ICCBased" and x.ColorSpace[1].read_bytes() == srgb, "JPEG : profil de couleurs gardé")
+        check(same(page_image(p[3])[0], pattern(alpha=True)), "capture d'écran : chaque point identique, transparence comprise")
+        if os.path.exists(f"{D}/iphone.heic"):
+            check(near(page_image(p[4])[0], up), "HEIC : page à l'endroit, couleurs justes")
+        else:
+            check(False, "HEIC : sips n'a pas pu fabriquer la photo d'essai")
+        want_c, want_m = ts("2019-05-12T14:03:22+02:00"), ts("2018-07-04T12:00:00+00:00")
+        st = os.stat(out[0])
+        check(int(getattr(st, "st_birthtime", -1)) == want_c, "date de création = prise de vue la plus ancienne (12/05/2019)")
+        check(int(st.st_mtime) == want_m, "date de modification = date interne du PDF la plus ancienne (04/07/2018)")
+        info = {k: str(pdf.docinfo.get(k)) for k in ("/CreationDate", "/ModDate")}
+        loc = lambda t: datetime.fromtimestamp(t).astimezone().strftime("D:%Y%m%d%H%M%S")
+        check(info["/CreationDate"].startswith(loc(want_c)) and info["/ModDate"].startswith(loc(want_m)),
+              f"dates internes du PDF identiques ({info})")
+check(all((sha(f), os.stat(f).st_mtime) == hashes[f] for f in mix), "originaux intacts (contenu et dates)")
+
+# --- 2. Images from the web and scans --------------------------------------------------------
+pal = up.convert("P", palette=Image.Palette.ADAPTIVE, colors=4)
+pal.save(f"{D}/logo.png", transparency=0)
+pal.save(f"{D}/anim.gif", save_all=True, append_images=[up.transpose(Image.Transpose.FLIP_LEFT_RIGHT).convert("P")], transparency=0)
+up.save(f"{D}/web.webp", lossless=True)
+bw = up.convert("1")
+up.save(f"{D}/scan.tif", save_all=True, append_images=[bw], compression="tiff_lzw")
+bw.save(f"{D}/fax.tif", compression="group4")
+turned.save(f"{D}/turned.tif", exif=ex)
+ex2 = Image.Exif()
+ex2[274] = 2
+up.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(f"{D}/selfie.jpg", quality=95, exif=ex2)
+web = ["logo.png", "anim.gif", "web.webp", "scan.tif", "fax.tif", "turned.tif", "selfie.jpg"]
+out, dialogs, _ = run(*[f"{D}/{n}" for n in web])
+check(len(out) == 1 and dialogs == "", f"web et scans : PDF créé sans alerte ({dialogs.strip()[:200]})")
+if out:
+    with pikepdf.open(out[0]) as pdf:
+        p = pdf.pages
+        check(len(p) == 8, f"web et scans : 8 pages, GIF animé = 1 page, scan de 2 pages = 2 ({len(p)})")
+        if len(p) == 8:
+            want = [Image.open(f"{D}/logo.png"), Image.open(f"{D}/anim.gif"), up, up, bw, bw, up,
+                    ImageOps.exif_transpose(Image.open(f"{D}/selfie.jpg"))]
+            labels = ["logo PNG transparent", "GIF (1re image)", "WebP", "scan TIFF page 1", "scan TIFF page 2 (noir et blanc)",
+                      "TIFF fax", "TIFF couché, redressé une seule fois", "selfie en miroir, remis à l'endroit"]
+            for i, (w, lab) in enumerate(zip(want, labels)):
+                check(same(page_image(p[i])[0], w), f"{lab} : chaque point identique")
+
+# --- 3. More than 8 bits per color -------------------------------------------------------------
+def png16(path, ctype):
+    n = 3 if ctype == 2 else 4
+    rows = b"".join(b"\0" + b"".join(struct.pack(">" + "H" * n, *[(x * 3001 + y * 77 + c * 999) % 65536 for c in range(n)])
+                                       for x in range(30)) for y in range(20))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+    open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 30, 20, 16, ctype, 0, 0, 0))
+                           + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+    return zlib.compress(rows)
+idat16 = png16(f"{D}/deep.png", 2)
+out, dialogs, _ = run(f"{D}/deep.png")
+ok = False
+if out:
+    with pikepdf.open(out[0]) as pdf:
+        x = list(pdf.pages[0].get_images(recursive=False).values())[0]
+        ok = x.BitsPerComponent == 16 and x.read_raw_bytes() == idat16
+check(ok and dialogs == "", "PNG 16 bits : gardé en 16 bits, données recopiées telles quelles")
+png16(f"{D}/deep-alpha.png", 6)
+out, dialogs, _ = run(f"{D}/deep-alpha.png")
+check(not out and "8 bits" in dialogs and "Aucun PDF" in dialogs, "PNG 16 bits transparent : refusé avec un message, rien créé")
+
+# --- 4. Refusals: nothing is created, the message names the file -------------------------------
+open(f"{D}/notes.txt", "w").write("pas une image")
+out, dialogs, _ = run(f"{D}/a.pdf", f"{D}/notes.txt")
+check(not out and "notes.txt" in dialogs and "Aucun PDF" in dialogs, "fichier non lisible au milieu : rien créé, fichier nommé")
+pikepdf.open(f"{D}/a.pdf").save(f"{D}/locked.pdf", encryption=pikepdf.Encryption(user="secret", owner="secret"))
+out, dialogs, _ = run(f"{D}/locked.pdf")
+check(not out and "mot de passe" in dialogs, "PDF protégé par mot de passe : refusé")
+os.mkdir(f"{D}/dossier")
+out, dialogs, _ = run(f"{D}/dossier")
+check(not out and "dossier" in dialogs, "dossier sélectionné : refusé")
+os.mkdir(f"{D}/ro")
+up.save(f"{D}/ro/photo.png")
+os.chmod(f"{D}/ro", 0o555)
+out, dialogs, _ = run(f"{D}/ro/photo.png")
+check(os.listdir(f"{D}/ro") == ["photo.png"] and "Impossible d'écrire" in dialogs, "dossier protégé en écriture : refusé, rien créé")
+
+# --- 5. Alerts: the PDF is created, the message says to keep the original ----------------------
+pdf = pikepdf.new()
+pdf.add_blank_page()
+pdf.attachments["facture.xml"] = pikepdf.AttachedFileSpec(pdf, b"<xml/>")
+pdf.Root.OCProperties = pikepdf.Dictionary(OCGs=pikepdf.Array(), D=pikepdf.Dictionary())
+sig = pdf.make_indirect(pikepdf.Dictionary(FT=pikepdf.Name.Sig, T="Signature1", V=pikepdf.Dictionary(Type=pikepdf.Name.Sig)))
+pdf.Root.AcroForm = pikepdf.Dictionary(Fields=pikepdf.Array([sig]), SigFlags=3)
+pdf.save(f"{D}/signe.pdf")
+out, dialogs, _ = run(f"{D}/signe.pdf")
+check(len(out) == 1 and all(w in dialogs for w in ("pièces jointes", "calques", "signature", "garde l'original")),
+      "pièce jointe, calques, signature : PDF créé avec l'alerte")
+
+# --- 6. Naming when the name is taken -----------------------------------------------------------
+open(f"{D}/b 2.pdf", "w").close()
+out, _, _ = run(f"{D}/b.pdf")
+check([os.path.basename(o) for o in out] == ["b 3.pdf"], "nom déjà pris : « b 3.pdf »")
+
+# --- 7. Speed on a full-size iPhone photo -------------------------------------------------------
+big = Image.effect_noise((4032, 3024), 40).convert("RGB")
+big.save(f"{D}/big.jpg", quality=90)
+subprocess.run(["sips", "-s", "format", "heic", f"{D}/big.jpg", "--out", f"{D}/big.heic"], capture_output=True)
+out, dialogs, took = run(f"{D}/big.heic")
+check(len(out) == 1 and dialogs == "", "photo HEIC de 12 Mpx : PDF créé")
+if out:
+    print(f"INFO   photo HEIC de 12 Mpx : {took:.1f} s, {os.path.getsize(f'{D}/big.heic') / 1e6:.1f} Mo en HEIC, "
+          f"{os.path.getsize(out[0]) / 1e6:.1f} Mo dans le PDF")
+print(f"Bilan : {oks} OK, {kos} ÉCHEC")
+PY
