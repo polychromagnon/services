@@ -136,6 +136,24 @@ def kind(path):
     return "macos"  # HEIC, AVIF, RAW...: decoded by macOS itself
 
 
+def harmless(path, warnings):
+    """True when every qpdf warning about this file is an empty index slot that nothing in
+    the file refers to (macOS writes such slots): the pages then lose nothing."""
+    empty = set()
+    for w in warnings:
+        m = re.search(r"\(object (\d+) (\d+)\): object has offset 0$", w)
+        if not m:
+            return False
+        empty.add(f"{m[1]} {m[2]} R".encode())
+    # qpdf drops a reference to an empty slot on reading, so look for it in the raw file and
+    # in its compressed object streams.
+    with open(path, "rb") as f:
+        texts = [f.read()]
+    with pikepdf.open(path) as pdf:
+        texts += [o.read_bytes() for o in pdf.objects if isinstance(o, pikepdf.Stream) and o.get("/Type") == "/ObjStm"]
+    return not any(re.search(rb"(?&lt;![\d.])" + e + rb"\b", t) for t in texts for e in empty)
+
+
 def add_pdf(path, name):
     try:
         pdf = pikepdf.open(path)
@@ -413,8 +431,14 @@ def run(files, work):
     if r.returncode not in (0, 3):
         refuse(f"L'assemblage a échoué (qpdf : {r.stderr.strip()[-150:]}).")
     if r.returncode == 3 or "WARNING" in r.stderr:  # qpdf names the damaged file in each warning
-        bad = [os.path.basename(f) for f, part in zip(files, parts) if part + ":" in r.stderr or part + " (" in r.stderr]
-        bad = bad or ["un PDF source"]
+        lines = r.stderr.splitlines()
+        bad = []
+        for f, part in zip(files, parts):
+            mine = [w for w in lines if w.startswith((f"WARNING: {part}:", f"WARNING: {part} ("))]
+            if mine and not harmless(part, mine):
+                bad.append(os.path.basename(f))
+        if not bad and any(w.startswith("WARNING") and not any(p in w for p in parts) for w in lines):
+            bad = ["un PDF source"]
         notes.extend(f"« {n} » était abîmé et a été réparé au passage : vérifie ses pages dans le PDF créé" for n in bad)
     final = os.path.join(work, "final.pdf")
     with pikepdf.open(merged) as pdf:
