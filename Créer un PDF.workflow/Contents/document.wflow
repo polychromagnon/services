@@ -79,8 +79,8 @@ PY=$(sed -n '1s/^#! *//p' /opt/homebrew/bin/img2pdf)
 exec "$PY" -I - "$@" &lt;&lt;'PY'
 import io, json, logging, os, re, shutil, subprocess, sys, tempfile, time
 from datetime import datetime, timedelta, timezone
-import img2pdf, pikepdf
-from PIL import Image, ImageOps
+import img2pdf, math, pikepdf
+from PIL import Image, ImageChops, ImageOps, ImageStat
 
 QPDF = "/opt/homebrew/bin/qpdf"
 EXIFTOOL = "/opt/homebrew/bin/exiftool"
@@ -249,6 +249,24 @@ def add_image(path, name, k, i, work):
         if r.returncode or not os.path.isfile(src):
             refuse(f"« {name} » n'est ni un PDF ni une image lisible.")
         path, k = src, "png"
+        # Michael 2026-10-25: a HEIC (or AVIF, RAW) becomes a JPEG of quality 98, half the size of
+        # its lossless pixels and no visible loss; only images with transparency stay lossless.
+        try:
+            up = ImageOps.exif_transpose(Image.open(path))
+            if up.mode in ("RGB", "L"):
+                jpg = os.path.join(work, f"{i}.jpg")
+                keep = {"icc_profile": up.info["icc_profile"]} if up.info.get("icc_profile") else {}
+                up.save(jpg, quality=98, subsampling=0, **keep)
+                # Above 40 dB the JPEG is the photo; a colour or turn mistake falls under 21 dB.
+                with Image.open(jpg) as back:
+                    mse = sum(v * v for v in ImageStat.Stat(ImageChops.difference(up, back)).rms) / len(up.getbands())
+                if mse and 10 * math.log10(255 ** 2 / mse) &lt; 40:
+                    refuse(f"« {name} » ne peut pas être converti fidèlement en JPEG.")
+                path, k = jpg, "jpeg"
+        except Refused:
+            raise
+        except Exception:
+            pass  # unreadable here: the lossless way below says why
     try:
         im = Image.open(path)
         frames = getattr(im, "n_frames", 1) if k == "tiff" else 1  # a scan keeps its pages, a photo gives one

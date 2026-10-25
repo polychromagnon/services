@@ -180,6 +180,7 @@ if out:
             check(near(im, up), f"HEIC : page à l'endroit, couleurs justes ({im.size[0]}x{im.size[1]})")
             got = desc(icc(x)) if icc(x) else "aucun profil"
             check(got == desc(p3), f"HEIC : profil de couleurs de l'iPhone (Display P3) gardé ({got.strip()})")
+            check(x.get("/Filter") == "/DCTDecode", f"HEIC : rangée en JPEG qualité 98 ({x.get('/Filter')})")
         want_c, want_m = ts("2019-05-12T14:03:22+02:00"), ts("2018-07-04T12:00:00+00:00")
         st = os.stat(out[0])
         check(int(getattr(st, "st_birthtime", -1)) == want_c, "date de création = prise de vue la plus ancienne (12/05/2019)")
