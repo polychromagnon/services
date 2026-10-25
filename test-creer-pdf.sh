@@ -266,6 +266,12 @@ out, dialogs, _ = run(f"{D}/signe.pdf")
 check(len(out) == 1 and all(w in dialogs for w in ("pièces jointes", "calques", "signature", "garde l'original")),
       f"pièce jointe, calques, signature : PDF créé avec l'alerte ({said(dialogs)})")
 
+make_pdf(f"{D}/abime.pdf", ["X1"])
+raw = open(f"{D}/abime.pdf", "rb").read()
+open(f"{D}/abime.pdf", "wb").write(raw[:raw.rindex(b"startxref")] + b"startxref\n999\n%%EOF\n")  # broken index
+out, dialogs, _ = run(f"{D}/abime.pdf")
+check(len(out) == 1 and "« abime.pdf » était abîmé" in dialogs, f"PDF abîmé : réparé, PDF créé, fichier nommé ({said(dialogs)})")
+
 # --- 6. Naming when the name is taken -----------------------------------------------------------
 open(f"{D}/b 2.pdf", "w").close()
 out, dialogs, _ = run(f"{D}/b.pdf")

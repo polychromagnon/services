@@ -366,8 +366,10 @@ def run(files, work):
                        capture_output=True, text=True)
     if r.returncode not in (0, 3):
         refuse(f"L'assemblage a échoué (qpdf : {r.stderr.strip()[-150:]}).")
-    if r.returncode == 3:
-        notes.append("un PDF source était abîmé et a été réparé au passage : vérifie le PDF créé")
+    if r.returncode == 3 or "WARNING" in r.stderr:  # qpdf names the damaged file in each warning
+        bad = [os.path.basename(f) for f, part in zip(files, parts) if part + ":" in r.stderr or part + " (" in r.stderr]
+        bad = bad or ["un PDF source"]
+        notes.extend(f"« {n} » était abîmé et a été réparé au passage : vérifie ses pages dans le PDF créé" for n in bad)
     final = os.path.join(work, "final.pdf")
     with pikepdf.open(merged) as pdf:
         if len(pdf.pages) != expected:
