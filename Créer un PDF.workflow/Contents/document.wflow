@@ -144,7 +144,7 @@ def harmless(path, warnings):
         m = re.search(r"\(object (\d+) (\d+)\): object has offset 0$", w)
         if not m:
             return False
-        empty.add(f"{m[1]} {m[2]} R".encode())
+        empty.add(rb"0*%d\s+%d\s+R" % (int(m[1]), int(m[2])))  # any spacing PDF allows
     # qpdf drops a reference to an empty slot on reading, so look for it in the raw file and
     # in its compressed object streams.
     with open(path, "rb") as f:
