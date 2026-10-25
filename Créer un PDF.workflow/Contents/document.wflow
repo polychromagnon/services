@@ -289,7 +289,7 @@ def add_image(path, name, k, i, work):
 
 
 def parse(text, offset=None):
-    m = re.match(r"(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d)(?::(\d\d))?(Z|[+-]\d\d:?\d\d)?", text or "")
+    m = re.match(r"(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d)(?::(\d\d))?(Z|[+-]\d\d:?\d\d)?", str(text or ""))  # exiftool -n gives a bare number for "2019"
     if not m:
         return None
     try:
