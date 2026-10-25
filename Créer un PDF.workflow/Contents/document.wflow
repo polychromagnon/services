@@ -64,7 +64,7 @@
 # The selected PDFs and images, in click order, become one PDF next to the first file,
 # named like Apple ("doc1 2.pdf"). PDF pages are copied byte for byte; every image page is
 # compared with its source before use, and an image that cannot be proven identical is
-# refused. The result carries the oldest creation date and the oldest modification date
+# refused. Only HEIC-like photos, which a PDF cannot hold, become a quality 98 JPEG. The result carries the oldest creation date and the oldest modification date
 # found among the sources (Finder dates, photo capture date, dates written inside a PDF).
 # The work runs in img2pdf's own Python, which holds img2pdf, Pillow and pikepdf.
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
@@ -201,6 +201,19 @@ def displayed(x, rot):
     return got.transpose(turn[rot]) if rot else got
 
 
+def upright(frame):
+    """The frame as the viewer must see it. Pillow 13 misreads an uncompressed TIFF that
+    carries a turn (stripes at the announced size): its size is checked against the file."""
+    up = ImageOps.exif_transpose(frame)
+    if hasattr(frame, "tag_v2"):
+        with Image.open(frame.filename) as fresh:  # loading drops the turn tag: read it unloaded
+            fresh.seek(frame.tell())
+            w, h, turn = fresh.tag_v2.get(256), fresh.tag_v2.get(257), fresh.tag_v2.get(274, 1)
+        if up.size != ((h, w) if turn in (5, 6, 7, 8) else (w, h)):
+            raise ValueError("TIFF mal lu par Pillow")
+    return up
+
+
 def same_pixels(a, b):
     if a.size != b.size:
         return False
@@ -248,7 +261,7 @@ def identical(pdfbytes, path, k, im, frames, deep):
                             or parms.get("/Columns") != width or parms.get("/Colors") != (1 if ctype == 0 else 3)):
                         return False
                 continue
-            if not same_pixels(displayed(x, rot), ImageOps.exif_transpose(im)):
+            if not same_pixels(displayed(x, rot), upright(im)):
                 return False
     return True
 
@@ -302,7 +315,7 @@ def add_image(path, name, k, i, work):
         pngs = []
         for j in range(frames):
             im.seek(j)
-            fr = ImageOps.exif_transpose(im)
+            fr = upright(im)
             if fr.mode in ("P", "PA"):
                 fr = fr.convert("RGBA" if fr.mode == "PA" or "transparency" in fr.info else "RGB")
             if fr.mode not in ("1", "L", "LA", "RGB", "RGBA"):
