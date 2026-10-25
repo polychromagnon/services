@@ -206,7 +206,8 @@ def identical(pdfbytes, path, k, im, frames, deep):
         if len(pdf.pages) != frames:
             return False
         for j, page in enumerate(pdf.pages):
-            xs = list(page.get_images(recursive=False).values())
+            xobjects = (page.obj.get("/Resources") or {}).get("/XObject") or {}
+            xs = [v for _, v in xobjects.items() if v.get("/Subtype") == "/Image"]
             if len(xs) != 1:
                 return False
             x = xs[0]
@@ -279,11 +280,11 @@ def add_image(path, name, k, i, work):
             pngs.append(os.path.join(work, f"{i}-{j}.png"))
             fr.save(pngs[-1], **keep)
         pdf = img2pdf.convert(pngs, rotation=img2pdf.Rotation.none)
-        ok = identical(pdf, path, "decoded", im, frames, False)
-    except Exception:
-        ok = False
-    if not ok:
-        refuse(f"« {name} » ne peut pas être inséré à l'identique.")
+        why = "" if identical(pdf, path, "decoded", im, frames, False) else "pages différentes de l'image"
+    except Exception as e:
+        why = f"{type(e).__name__} : {e}"
+    if why:
+        refuse(f"« {name} » ne peut pas être inséré à l'identique ({why}).")
     return pdf, frames
 
 

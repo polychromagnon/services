@@ -22,11 +22,12 @@ chmod +x "$T/bin/osascript"
 "$PY" -I - "$T" <<'PY'
 import hashlib, io, os, struct, subprocess, sys, time, zlib
 from datetime import datetime, timezone
-import pikepdf
+import img2pdf, pikepdf, PIL
 from PIL import Image, ImageCms, ImageOps
 
 T = sys.argv[1]
 oks = kos = 0
+print(f"INFO   img2pdf {img2pdf.__version__}, pikepdf {pikepdf.__version__}, Pillow {PIL.__version__}, Python {sys.version.split()[0]}")
 
 
 def check(cond, label):
@@ -81,8 +82,13 @@ def run(*files):
     return [os.path.join(folder, n) for n in new], open(log).read(), time.time() - t0
 
 
+def first_image(page):
+    xobjects = (page.obj.get("/Resources") or {}).get("/XObject") or {}
+    return [v for _, v in xobjects.items() if v.get("/Subtype") == "/Image"][0]
+
+
 def page_image(page):
-    x = list(page.get_images(recursive=False).values())[0]
+    x = first_image(page)
     im = pikepdf.PdfImage(x).as_pil_image()
     if "/SMask" in x and im.mode not in ("RGBA", "LA"):
         im = im.convert("RGBA")
@@ -205,7 +211,7 @@ out, dialogs, _ = run(f"{D}/deep.png")
 ok = False
 if out:
     with pikepdf.open(out[0]) as pdf:
-        x = list(pdf.pages[0].get_images(recursive=False).values())[0]
+        x = first_image(pdf.pages[0])
         ok = x.BitsPerComponent == 16 and x.read_raw_bytes() == idat16
 check(ok and dialogs == "", "PNG 16 bits : gardé en 16 bits, données recopiées telles quelles")
 png16(f"{D}/deep-alpha.png", 6)
