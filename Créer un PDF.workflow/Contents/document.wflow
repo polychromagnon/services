@@ -104,7 +104,7 @@ def refuse(text):
 Image.MAX_IMAGE_PIXELS = None  # big scans and panoramas are legitimate input
 logging.disable(logging.WARNING)
 ANGLE = {1: 0, 3: 180, 6: 90, 8: 270}  # EXIF orientation -&gt; clockwise page rotation
-notes = []
+notes, made = [], []
 
 
 def kind(path):
@@ -393,6 +393,7 @@ def run(files, work):
     except OSError:
         os.remove(target)
         refuse(f"Écriture impossible dans « {folder} » (disque plein ?).")
+    made.append(target)
 
     # File dates: modification first, creation last, because lowering the modification date
     # below the creation date drags the creation date down with it.
@@ -419,6 +420,9 @@ if files:
         run(files, work)
     except Refused as e:
         dialog(f"{e}\n\nAucun PDF créé.")
+    except Exception as e:  # a bug or a library change: say what broke instead of failing silently
+        why = f"erreur inattendue ({type(e).__name__} : {e})"
+        dialog(f"« {os.path.basename(made[0])} » est créé, mais à vérifier : {why}" if made else f"Créer un PDF : {why}.\n\nAucun PDF créé.")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 PY

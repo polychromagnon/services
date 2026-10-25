@@ -80,10 +80,27 @@ def run(*files):
     folder = os.path.dirname(files[0])
     before = set(os.listdir(folder))
     t0 = time.time()
-    subprocess.run(["/bin/bash", os.path.join(T, "action.sh"), *files], capture_output=True,
-                   env={"PATH": f"{T}/bin:/usr/bin:/bin:/usr/sbin:/sbin", "DIALOG_LOG": log, "HOME": os.environ["HOME"]})
+    r = subprocess.run(["/bin/bash", os.path.join(T, "action.sh"), *files], capture_output=True, text=True,
+                       env={"PATH": f"{T}/bin:/usr/bin:/bin:/usr/sbin:/sbin", "DIALOG_LOG": log, "HOME": os.environ["HOME"]})
     new = sorted(set(os.listdir(folder)) - before)
-    return [os.path.join(folder, n) for n in new], open(log).read(), time.time() - t0
+    dialogs = open(log).read()
+    if r.returncode:  # the action crashed: its last error line says why
+        dialogs += "plantage : " + (r.stderr.strip().splitlines() or ["?"])[-1]
+    return [os.path.join(folder, n) for n in new], dialogs, time.time() - t0
+
+
+def heic(src, out):
+    """Makes an iPhone-like HEIC with the Mac's own sips; says why when it cannot."""
+    r = subprocess.run(["sips", "-s", "format", "heic", src, "--out", out], capture_output=True, text=True)
+    if os.path.exists(out):
+        return True
+    check(False, f"HEIC : sips n'a pas pu fabriquer la photo d'essai ({said(r.stderr + r.stdout)})")
+    return False
+
+
+def icc(x):
+    cs = x.get("/ColorSpace")
+    return cs[1].read_bytes() if isinstance(cs, pikepdf.Array) and cs[0] == "/ICCBased" else b""
 
 
 def first_image(page):
@@ -136,8 +153,9 @@ ex.get_ifd(0x8769).update({0x9003: "2019:05:12 14:03:22", 0x9011: "+02:00"})
 turned.save(f"{D}/photo.jpg", quality=92, exif=ex, icc_profile=srgb)
 pattern(alpha=True).save(f"{D}/capture.png")
 turned.save(f"{D}/p3.jpg", quality=95, exif=ex, icc_profile=p3)
-subprocess.run(["sips", "-s", "format", "heic", f"{D}/p3.jpg", "--out", f"{D}/iphone.heic"], capture_output=True)
-mix = [f"{D}/a.pdf", f"{D}/photo.jpg", f"{D}/capture.png", f"{D}/iphone.heic", f"{D}/b.pdf"]
+has_heic = heic(f"{D}/p3.jpg", f"{D}/iphone.heic")
+mix = [f"{D}/a.pdf", f"{D}/photo.jpg", f"{D}/capture.png"] + [f"{D}/iphone.heic"] * has_heic + [f"{D}/b.pdf"]
+pages = 5 + has_heic
 for f in mix:
     setdates(f, ts("2023-01-01T10:00:00"), ts("2024-01-01T10:00:00"))
 setdates(f"{D}/capture.png", ts("2021-06-01T08:00:00"), ts("2024-01-01T10:00:00"))
@@ -148,22 +166,20 @@ check(dialogs == "", f"mélange : aucune alerte ({said(dialogs)})")
 if out:
     with pikepdf.open(out[0]) as pdf, pikepdf.open(f"{D}/a.pdf") as a, pikepdf.open(f"{D}/b.pdf") as b:
         p = pdf.pages
-        check(len(p) == 6, f"mélange : 6 pages ({len(p)})")
-        check(len(p) == 6 and [p[i].Contents.read_raw_bytes() for i in (0, 1, 5)]
+        check(len(p) == pages, f"mélange : {pages} pages ({len(p)})")
+        check(len(p) == pages and [p[i].Contents.read_raw_bytes() for i in (0, 1, -1)]
               == [a.pages[0].Contents.read_raw_bytes(), a.pages[1].Contents.read_raw_bytes(), b.pages[0].Contents.read_raw_bytes()],
               "mélange : pages PDF recopiées à l'octet près, dans l'ordre des clics")
         im, x, rot = page_image(p[2])
         check(x.read_raw_bytes() == open(f"{D}/photo.jpg", "rb").read() and rot == 90,
               "JPEG : recopié à l'octet près, redressé par la page")
-        check(x.ColorSpace[0] == "/ICCBased" and x.ColorSpace[1].read_bytes() == srgb, "JPEG : profil de couleurs gardé")
+        check(icc(x) == srgb, "JPEG : profil de couleurs gardé")
         check(same(page_image(p[3])[0], pattern(alpha=True)), "capture d'écran : chaque point identique, transparence comprise")
-        if os.path.exists(f"{D}/iphone.heic"):
+        if has_heic and len(p) == pages:
             im, x, _ = page_image(p[4])
-            check(near(im, up), "HEIC : page à l'endroit, couleurs justes")
-            check(x.ColorSpace[0] == "/ICCBased" and desc(x.ColorSpace[1].read_bytes()) == desc(p3),
-                  "HEIC : profil de couleurs de l'iPhone (Display P3) gardé")
-        else:
-            check(False, "HEIC : sips n'a pas pu fabriquer la photo d'essai")
+            check(near(im, up), f"HEIC : page à l'endroit, couleurs justes ({im.size[0]}x{im.size[1]})")
+            got = desc(icc(x)) if icc(x) else "aucun profil"
+            check(got == desc(p3), f"HEIC : profil de couleurs de l'iPhone (Display P3) gardé ({got.strip()})")
         want_c, want_m = ts("2019-05-12T14:03:22+02:00"), ts("2018-07-04T12:00:00+00:00")
         st = os.stat(out[0])
         check(int(getattr(st, "st_birthtime", -1)) == want_c, "date de création = prise de vue la plus ancienne (12/05/2019)")
@@ -220,18 +236,18 @@ if out:
 check(ok and dialogs == "", f"PNG 16 bits : gardé en 16 bits, données recopiées telles quelles ({said(dialogs)})")
 png16(f"{D}/deep-alpha.png", 6)
 out, dialogs, _ = run(f"{D}/deep-alpha.png")
-check(not out and "8 bits" in dialogs and "Aucun PDF" in dialogs, "PNG 16 bits transparent : refusé avec un message, rien créé")
+check(not out and "8 bits" in dialogs and "Aucun PDF" in dialogs, f"PNG 16 bits transparent : refusé avec un message, rien créé ({said(dialogs)})")
 
 # --- 4. Refusals: nothing is created, the message names the file -------------------------------
 open(f"{D}/notes.txt", "w").write("pas une image")
 out, dialogs, _ = run(f"{D}/a.pdf", f"{D}/notes.txt")
-check(not out and "notes.txt" in dialogs and "Aucun PDF" in dialogs, "fichier non lisible au milieu : rien créé, fichier nommé")
+check(not out and "notes.txt" in dialogs and "Aucun PDF" in dialogs, f"fichier non lisible au milieu : rien créé, fichier nommé ({said(dialogs)})")
 pikepdf.open(f"{D}/a.pdf").save(f"{D}/locked.pdf", encryption=pikepdf.Encryption(user="secret", owner="secret"))
 out, dialogs, _ = run(f"{D}/locked.pdf")
-check(not out and "mot de passe" in dialogs, "PDF protégé par mot de passe : refusé")
+check(not out and "mot de passe" in dialogs, f"PDF protégé par mot de passe : refusé ({said(dialogs)})")
 os.mkdir(f"{D}/dossier")
 out, dialogs, _ = run(f"{D}/dossier")
-check(not out and "dossier" in dialogs, "dossier sélectionné : refusé")
+check(not out and "dossier" in dialogs, f"dossier sélectionné : refusé ({said(dialogs)})")
 os.mkdir(f"{D}/ro")
 up.save(f"{D}/ro/photo.png")
 os.chmod(f"{D}/ro", 0o555)
@@ -248,19 +264,20 @@ pdf.Root.AcroForm = pikepdf.Dictionary(Fields=pikepdf.Array([sig]), SigFlags=3)
 pdf.save(f"{D}/signe.pdf")
 out, dialogs, _ = run(f"{D}/signe.pdf")
 check(len(out) == 1 and all(w in dialogs for w in ("pièces jointes", "calques", "signature", "garde l'original")),
-      "pièce jointe, calques, signature : PDF créé avec l'alerte")
+      f"pièce jointe, calques, signature : PDF créé avec l'alerte ({said(dialogs)})")
 
 # --- 6. Naming when the name is taken -----------------------------------------------------------
 open(f"{D}/b 2.pdf", "w").close()
-out, _, _ = run(f"{D}/b.pdf")
-check([os.path.basename(o) for o in out] == ["b 3.pdf"], "nom déjà pris : « b 3.pdf »")
+out, dialogs, _ = run(f"{D}/b.pdf")
+check([os.path.basename(o) for o in out] == ["b 3.pdf"], f"nom déjà pris : « b 3.pdf » ({[os.path.basename(o) for o in out]} {said(dialogs)})")
 
 # --- 7. Speed on a full-size iPhone photo -------------------------------------------------------
 big = Image.effect_noise((4032, 3024), 40).convert("RGB")
 big.save(f"{D}/big.jpg", quality=90)
-subprocess.run(["sips", "-s", "format", "heic", f"{D}/big.jpg", "--out", f"{D}/big.heic"], capture_output=True)
-out, dialogs, took = run(f"{D}/big.heic")
-check(len(out) == 1 and dialogs == "", f"photo HEIC de 12 Mpx : PDF créé ({said(dialogs)})")
+out = []
+if heic(f"{D}/big.jpg", f"{D}/big.heic"):
+    out, dialogs, took = run(f"{D}/big.heic")
+    check(len(out) == 1 and dialogs == "", f"photo HEIC de 12 Mpx : PDF créé ({said(dialogs)})")
 if out:
     print(f"INFO   photo HEIC de 12 Mpx : {took:.1f} s, {os.path.getsize(f'{D}/big.heic') / 1e6:.1f} Mo en HEIC, "
           f"{os.path.getsize(out[0]) / 1e6:.1f} Mo dans le PDF")
