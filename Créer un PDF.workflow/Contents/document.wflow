@@ -111,6 +111,7 @@ def a4_wide(turned):
     """img2pdf layout: once displayed, every image page is as wide as an A4 sheet and as tall as
     the image's proportions say (Michael 2026-10-25). Only the page size changes, never a pixel."""
     def layout(w, h, dpi):  # w, h: the image as stored, before the page turns it
+        w, h = w / dpi[0], h / dpi[1]  # a fax has taller than wide dots (204 x 98 dpi)
         pw, ph = (A4_WIDTH * w / h, A4_WIDTH) if turned else (A4_WIDTH, A4_WIDTH * h / w)
         return pw, ph, pw, ph
     return layout
@@ -267,7 +268,7 @@ def add_image(path, name, k, i, work):
                 jpg = os.path.join(work, f"{i}.jpg")
                 keep = {"icc_profile": up.info["icc_profile"]} if up.info.get("icc_profile") else {}
                 up.save(jpg, quality=98, subsampling=0, **keep)
-                # Above 40 dB the JPEG is the photo; a colour or turn mistake falls under 21 dB.
+                # The JPEG must stay close to the decoded photo: quality 98 measures 43 to 57 dB.
                 with Image.open(jpg) as back:
                     mse = sum(v * v for v in ImageStat.Stat(ImageChops.difference(up, back)).rms) / len(up.getbands())
                 if mse and 10 * math.log10(255 ** 2 / mse) &lt; 40:
@@ -306,7 +307,7 @@ def add_image(path, name, k, i, work):
                 fr = fr.convert("RGBA" if fr.mode == "PA" or "transparency" in fr.info else "RGB")
             if fr.mode not in ("1", "L", "LA", "RGB", "RGBA"):
                 raise ValueError(fr.mode)  # CMYK, 32-bit...: no lossless PNG for them
-            keep = {"icc_profile": im.info["icc_profile"]} if im.info.get("icc_profile") else {}
+            keep = {key: im.info[key] for key in ("icc_profile", "dpi") if im.info.get(key)}
             pngs.append(os.path.join(work, f"{i}-{j}.png"))
             fr.save(pngs[-1], **keep)
         pdf = img2pdf.convert(pngs, rotation=img2pdf.Rotation.none, layout_fun=a4_wide(False))

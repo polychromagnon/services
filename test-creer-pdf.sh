@@ -119,14 +119,14 @@ def page_image(page):
     return (im.transpose(turn[rot]) if rot else im), x, rot
 
 
-def a4_wide(page):
+def a4_wide(page, dots=1.0):
     """Shown 21 cm wide (a turned page swaps its sides), as tall as the image's proportions."""
     mb = [float(v) for v in page.mediabox]
     w, h = (mb[2] - mb[0]) / 72 * 2.54, (mb[3] - mb[1]) / 72 * 2.54
     if int(page.obj.get("/Rotate", 0)) % 180:
         w, h = h, w
     im = page_image(page)[0]
-    return abs(w - 21) < 0.01 and abs(h - 21 * im.height / im.width) < 0.05, f"{w:.1f} x {h:.1f} cm"
+    return abs(w - 21) < 0.01 and abs(h - 21 * im.height / im.width * dots) < 0.05, f"{w:.1f} x {h:.1f} cm"
 
 
 def same(a, b):
@@ -193,7 +193,7 @@ if out:
             check(near(im, up), f"HEIC : page à l'endroit, couleurs justes ({im.size[0]}x{im.size[1]})")
             got = desc(icc(x)) if icc(x) else "aucun profil"
             check(got == desc(p3), f"HEIC : profil de couleurs de l'iPhone (Display P3) gardé ({got.strip()})")
-            check(x.get("/Filter") == "/DCTDecode", f"HEIC : rangée en JPEG qualité 98 ({x.get('/Filter')})")
+            check(x.get("/Filter") == "/DCTDecode", f"HEIC : rangée en JPEG ({x.get('/Filter')})")
         want_c, want_m = ts("2019-05-12T14:03:22+02:00"), ts("2018-07-04T12:00:00+00:00")
         st = os.stat(out[0])
         check(int(getattr(st, "st_birthtime", -1)) == want_c, "date de création = prise de vue la plus ancienne (12/05/2019)")
@@ -211,7 +211,7 @@ pal.save(f"{D}/anim.gif", save_all=True, append_images=[up.transpose(Image.Trans
 up.save(f"{D}/web.webp", lossless=True)
 bw = up.convert("1")
 up.save(f"{D}/scan.tif", save_all=True, append_images=[bw], compression="tiff_lzw")
-bw.save(f"{D}/fax.tif", compression="group4")
+bw.save(f"{D}/fax.tif", compression="group4", dpi=(204, 98))  # a fax: dots twice as tall as wide
 turned.save(f"{D}/turned.tif", exif=ex)
 ex2 = Image.Exif()
 ex2[274] = 2
@@ -230,7 +230,7 @@ if out:
                       "TIFF fax", "TIFF couché, redressé une seule fois", "selfie en miroir, remis à l'endroit"]
             for i, (w, lab) in enumerate(zip(want, labels)):
                 check(same(page_image(p[i])[0], w), f"{lab} : chaque point identique")
-            sizes = [a4_wide(pg) for pg in p]
+            sizes = [a4_wide(pg, 204 / 98 if i == 5 else 1.0) for i, pg in enumerate(p)]
             check(all(ok for ok, _ in sizes), f"web et scans : 21 cm de large partout ({[t for _, t in sizes]})")
 
 # --- 3. More than 8 bits per color -------------------------------------------------------------
