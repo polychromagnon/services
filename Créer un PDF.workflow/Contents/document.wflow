@@ -288,7 +288,7 @@ def add_image(path, name, k, i, work):
     return pdf, frames
 
 
-def parse(text, offset=None):
+def parse(text, offset=None, since=1900):
     m = re.match(r"(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d)(?::(\d\d))?(Z|[+-]\d\d:?\d\d)?", str(text or ""))  # exiftool -n gives a bare number for "2019"
     if not m:
         return None
@@ -296,6 +296,8 @@ def parse(text, offset=None):
         d = datetime(*(int(v or 0) for v in m.groups()[:6]))
     except ValueError:
         return None  # "0000:00:00 00:00:00" and the like
+    if d.year &lt; since:
+        return None  # a software default (0001, 1601, 1904, 1970), not a real date
     tz = m.group(7) or offset
     if tz:
         if tz == "Z":
@@ -319,10 +321,11 @@ def oldest_dates(files):
         if r.returncode:
             raise ValueError
         for rec in json.loads(r.stdout):
-            for t in (parse(rec.get("DateTimeOriginal"), rec.get("OffsetTimeOriginal")), parse(rec.get("CreateDate"))):
+            # PDF dates before 1993, the year PDF was born, are software defaults.
+            for t in (parse(rec.get("DateTimeOriginal"), rec.get("OffsetTimeOriginal")), parse(rec.get("CreateDate"), since=1993)):
                 if t:
                     created.append(t)
-            t = parse(rec.get("ModifyDate"))
+            t = parse(rec.get("ModifyDate"), since=1993)
             if t:
                 modified.append(t)
     except ValueError:
