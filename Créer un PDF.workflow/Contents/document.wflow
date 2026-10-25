@@ -277,6 +277,8 @@ def add_image(path, name, k, i, work):
         # its lossless pixels and no visible loss; only images with transparency stay lossless.
         try:
             up = ImageOps.exif_transpose(Image.open(path))
+            if up.mode in ("RGBA", "LA") and up.getchannel("A").getextrema() == (255, 255):
+                up = up.convert(up.mode[:-1])  # sips may add a fully opaque alpha: it holds nothing
             if up.mode in ("RGB", "L"):
                 jpg = os.path.join(work, f"{i}.jpg")
                 keep = {"icc_profile": up.info["icc_profile"]} if up.info.get("icc_profile") else {}
