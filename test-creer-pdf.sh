@@ -36,6 +36,10 @@ def check(cond, label):
     oks, kos = oks + bool(cond), kos + (not cond)
 
 
+def said(dialogs):
+    return " ".join(dialogs.split())[:200]
+
+
 def setdates(path, birth, mtime):
     os.utime(path, (mtime, mtime))
     subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-e", """function run(a) { ObjC.import('Foundation');
@@ -140,7 +144,7 @@ setdates(f"{D}/capture.png", ts("2021-06-01T08:00:00"), ts("2024-01-01T10:00:00"
 hashes = {f: (sha(f), os.stat(f).st_mtime) for f in mix}
 out, dialogs, took = run(*mix)
 check(len(out) == 1 and os.path.basename(out[0]) == "a 2.pdf", f"mélange : un seul PDF, nommé comme chez Apple ({[os.path.basename(o) for o in out]})")
-check(dialogs == "", f"mélange : aucune alerte ({dialogs.strip()[:200]})")
+check(dialogs == "", f"mélange : aucune alerte ({said(dialogs)})")
 if out:
     with pikepdf.open(out[0]) as pdf, pikepdf.open(f"{D}/a.pdf") as a, pikepdf.open(f"{D}/b.pdf") as b:
         p = pdf.pages
@@ -184,7 +188,7 @@ ex2[274] = 2
 up.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(f"{D}/selfie.jpg", quality=95, exif=ex2)
 web = ["logo.png", "anim.gif", "web.webp", "scan.tif", "fax.tif", "turned.tif", "selfie.jpg"]
 out, dialogs, _ = run(*[f"{D}/{n}" for n in web])
-check(len(out) == 1 and dialogs == "", f"web et scans : PDF créé sans alerte ({dialogs.strip()[:200]})")
+check(len(out) == 1 and dialogs == "", f"web et scans : PDF créé sans alerte ({said(dialogs)})")
 if out:
     with pikepdf.open(out[0]) as pdf:
         p = pdf.pages
@@ -213,7 +217,7 @@ if out:
     with pikepdf.open(out[0]) as pdf:
         x = first_image(pdf.pages[0])
         ok = x.BitsPerComponent == 16 and x.read_raw_bytes() == idat16
-check(ok and dialogs == "", "PNG 16 bits : gardé en 16 bits, données recopiées telles quelles")
+check(ok and dialogs == "", f"PNG 16 bits : gardé en 16 bits, données recopiées telles quelles ({said(dialogs)})")
 png16(f"{D}/deep-alpha.png", 6)
 out, dialogs, _ = run(f"{D}/deep-alpha.png")
 check(not out and "8 bits" in dialogs and "Aucun PDF" in dialogs, "PNG 16 bits transparent : refusé avec un message, rien créé")
@@ -232,7 +236,7 @@ os.mkdir(f"{D}/ro")
 up.save(f"{D}/ro/photo.png")
 os.chmod(f"{D}/ro", 0o555)
 out, dialogs, _ = run(f"{D}/ro/photo.png")
-check(os.listdir(f"{D}/ro") == ["photo.png"] and "Impossible d'écrire" in dialogs, "dossier protégé en écriture : refusé, rien créé")
+check(os.listdir(f"{D}/ro") == ["photo.png"] and "Impossible d'écrire" in dialogs, f"dossier protégé en écriture : refusé, rien créé ({said(dialogs)})")
 
 # --- 5. Alerts: the PDF is created, the message says to keep the original ----------------------
 pdf = pikepdf.new()
@@ -256,7 +260,7 @@ big = Image.effect_noise((4032, 3024), 40).convert("RGB")
 big.save(f"{D}/big.jpg", quality=90)
 subprocess.run(["sips", "-s", "format", "heic", f"{D}/big.jpg", "--out", f"{D}/big.heic"], capture_output=True)
 out, dialogs, took = run(f"{D}/big.heic")
-check(len(out) == 1 and dialogs == "", "photo HEIC de 12 Mpx : PDF créé")
+check(len(out) == 1 and dialogs == "", f"photo HEIC de 12 Mpx : PDF créé ({said(dialogs)})")
 if out:
     print(f"INFO   photo HEIC de 12 Mpx : {took:.1f} s, {os.path.getsize(f'{D}/big.heic') / 1e6:.1f} Mo en HEIC, "
           f"{os.path.getsize(out[0]) / 1e6:.1f} Mo dans le PDF")
