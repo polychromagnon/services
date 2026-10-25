@@ -119,6 +119,16 @@ def page_image(page):
     return (im.transpose(turn[rot]) if rot else im), x, rot
 
 
+def a4_wide(page):
+    """Shown 21 cm wide (a turned page swaps its sides), as tall as the image's proportions."""
+    mb = [float(v) for v in page.mediabox]
+    w, h = (mb[2] - mb[0]) / 72 * 2.54, (mb[3] - mb[1]) / 72 * 2.54
+    if int(page.obj.get("/Rotate", 0)) % 180:
+        w, h = h, w
+    im = page_image(page)[0]
+    return abs(w - 21) < 0.01 and abs(h - 21 * im.height / im.width) < 0.05, f"{w:.1f} x {h:.1f} cm"
+
+
 def same(a, b):
     mode = "RGBA" if "A" in a.mode + b.mode or "transparency" in b.info else "RGB"
     return a.size == b.size and a.convert(mode).tobytes() == b.convert(mode).tobytes()
@@ -175,6 +185,9 @@ if out:
               "JPEG : recopié à l'octet près, redressé par la page")
         check(icc(x) == srgb, "JPEG : profil de couleurs gardé")
         check(same(page_image(p[3])[0], pattern(alpha=True)), "capture d'écran : chaque point identique, transparence comprise")
+        if len(p) == pages:
+            sizes = [a4_wide(p[i]) for i in range(2, 3 + has_heic + 1)]
+            check(all(ok for ok, _ in sizes), f"pages photo : 21 cm de large, proportions gardées ({[t for _, t in sizes]})")
         if has_heic and len(p) == pages:
             im, x, _ = page_image(p[4])
             check(near(im, up), f"HEIC : page à l'endroit, couleurs justes ({im.size[0]}x{im.size[1]})")
@@ -217,6 +230,8 @@ if out:
                       "TIFF fax", "TIFF couché, redressé une seule fois", "selfie en miroir, remis à l'endroit"]
             for i, (w, lab) in enumerate(zip(want, labels)):
                 check(same(page_image(p[i])[0], w), f"{lab} : chaque point identique")
+            sizes = [a4_wide(pg) for pg in p]
+            check(all(ok for ok, _ in sizes), f"web et scans : 21 cm de large partout ({[t for _, t in sizes]})")
 
 # --- 3. More than 8 bits per color -------------------------------------------------------------
 def png16(path, ctype):

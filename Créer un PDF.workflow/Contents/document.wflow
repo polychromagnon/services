@@ -104,6 +104,16 @@ def refuse(text):
 Image.MAX_IMAGE_PIXELS = None  # big scans and panoramas are legitimate input
 logging.disable(logging.WARNING)
 ANGLE = {1: 0, 3: 180, 6: 90, 8: 270}  # EXIF orientation -&gt; clockwise page rotation
+A4_WIDTH = 595.276  # points
+
+
+def a4_wide(turned):
+    """img2pdf layout: once displayed, every image page is as wide as an A4 sheet and as tall as
+    the image's proportions say (Michael 2026-10-25). Only the page size changes, never a pixel."""
+    def layout(w, h, dpi):  # w, h: the image as stored, before the page turns it
+        pw, ph = (A4_WIDTH * w / h, A4_WIDTH) if turned else (A4_WIDTH, A4_WIDTH * h / w)
+        return pw, ph, pw, ph
+    return layout
 notes, made = [], []
 
 
@@ -277,7 +287,9 @@ def add_image(path, name, k, i, work):
         refuse(f"« {name} » a plus de 8 bits par couleur et ne peut pas être inséré sans perte.")
     # First way: img2pdf stores the file as it is (JPEG and most PNG untouched).
     try:
-        pdf = img2pdf.convert(path, rotation=img2pdf.Rotation.ifvalid, first_frame_only=(k != "tiff"))
+        turned = ANGLE.get(im.getexif().get(274, 1)) in (90, 270)
+        pdf = img2pdf.convert(path, rotation=img2pdf.Rotation.ifvalid, first_frame_only=(k != "tiff"),
+                              layout_fun=a4_wide(turned))
         if identical(pdf, path, k, im, frames, deep):
             return pdf, frames
     except Exception:
@@ -294,10 +306,10 @@ def add_image(path, name, k, i, work):
                 fr = fr.convert("RGBA" if fr.mode == "PA" or "transparency" in fr.info else "RGB")
             if fr.mode not in ("1", "L", "LA", "RGB", "RGBA"):
                 raise ValueError(fr.mode)  # CMYK, 32-bit...: no lossless PNG for them
-            keep = {key: im.info[key] for key in ("icc_profile", "dpi") if im.info.get(key)}
+            keep = {"icc_profile": im.info["icc_profile"]} if im.info.get("icc_profile") else {}
             pngs.append(os.path.join(work, f"{i}-{j}.png"))
             fr.save(pngs[-1], **keep)
-        pdf = img2pdf.convert(pngs, rotation=img2pdf.Rotation.none)
+        pdf = img2pdf.convert(pngs, rotation=img2pdf.Rotation.none, layout_fun=a4_wide(False))
         why = "" if identical(pdf, path, "decoded", im, frames, False) else "pages différentes de l'image"
     except Exception as e:
         why = f"{type(e).__name__} : {e}"
