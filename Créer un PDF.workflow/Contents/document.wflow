@@ -141,7 +141,7 @@ def harmless(path, warnings):
     the file refers to (macOS writes such slots): the pages then lose nothing."""
     empty = set()
     for w in warnings:
-        m = re.search(r"\(object (\d+) (\d+)\): object has offset 0$", w)
+        m = re.search(r"\(object (\d+) (\d+)\): object has offset 0\b", w)  # qpdf 12 adds " - a common error..."
         if not m:
             return False
         empty.add(rb"0*%d\s+%d\s+R" % (int(m[1]), int(m[2])))  # any spacing PDF allows

@@ -20,7 +20,7 @@ printf '%s\n' "${@: -1}" >>"$DIALOG_LOG"
 EOF
 chmod +x "$T/bin/osascript"
 "$PY" -I - "$T" <<'PY'
-import hashlib, io, os, struct, subprocess, sys, time, zlib
+import hashlib, io, os, re, struct, subprocess, sys, time, zlib
 from datetime import datetime, timezone
 import img2pdf, pikepdf, PIL
 from PIL import Image, ImageCms, ImageOps
@@ -287,6 +287,36 @@ raw = open(f"{D}/abime.pdf", "rb").read()
 open(f"{D}/abime.pdf", "wb").write(raw[:raw.rindex(b"startxref")] + b"startxref\n999\n%%EOF\n")  # broken index
 out, dialogs, _ = run(f"{D}/abime.pdf")
 check(len(out) == 1 and "« abime.pdf » était abîmé" in dialogs, f"PDF abîmé : réparé, PDF créé, fichier nommé ({said(dialogs)})")
+
+
+def empty_slot(path, used=False):
+    """macOS writes index slots at offset 0. Unused: harmless. Used (here the page content): a
+    real loss. Like macOS, the page size sits on the page tree: qpdf 12 then reads every slot."""
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(200, 100))
+    pdf.pages[0].Contents = pdf.make_stream(b"0 0 m 150 80 l S\n")
+    pdf.Root.Pages.MediaBox = pdf.pages[0].obj.MediaBox
+    del pdf.pages[0].obj.MediaBox
+    pdf.save(path)
+    raw = open(path, "rb").read()
+    m = re.search(rb"\nxref\n0 (\d+)\n", raw)
+    n, t = int(m[1]), raw.index(b"trailer", m.end())
+    if used:
+        k = int(re.search(rb"/Contents (\d+) 0 R", raw)[1])
+        at = m.end() + 20 * k
+        raw = raw[:at] + b"0000000000 00000 n \n" + raw[at + 20:]
+    else:
+        raw = (raw[:m.start()] + b"\nxref\n0 %d\n" % (n + 1) + raw[m.end():t] + b"0000000000 00000 n \n"
+               + raw[t:].replace(b"/Size %d" % n, b"/Size %d" % (n + 1), 1))
+    open(path, "wb").write(raw)
+
+
+empty_slot(f"{D}/apple.pdf")
+out, dialogs, _ = run(f"{D}/apple.pdf")
+check(len(out) == 1 and "abîmé" not in dialogs, f"PDF de macOS à case vide inutilisée : pas d'alerte ({said(dialogs)})")
+empty_slot(f"{D}/vide.pdf", used=True)
+out, dialogs, _ = run(f"{D}/vide.pdf")
+check(len(out) == 1 and "« vide.pdf » était abîmé" in dialogs, f"case vide utilisée : alerte ({said(dialogs)})")
 
 # --- 6. Naming when the name is taken -----------------------------------------------------------
 open(f"{D}/b 2.pdf", "w").close()
