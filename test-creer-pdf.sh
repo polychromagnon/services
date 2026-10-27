@@ -135,14 +135,15 @@ def same(a, b):
 
 
 # Michael's own iPhone photo, stored on its side ("Rotate 90 CW"), Display P3. Upright it is
-# 3024 x 4032 and, averaged to 3 x 4 blocks, has these colors (checked by eye on the Mac).
+# 3024 x 4032 and, averaged to 3 x 4 blocks, has these colors (checked by eye on the Mac;
+# turned or mirrored, some block is 43 to 62 off, so 20 leaves room for the Mac's decoder).
 PHOTO = os.path.normpath(os.path.join(sys.argv[2], "..", "test-HEIC", "img.heic"))
 UPRIGHT = bytes.fromhex("6d6e6e969a9d797c7b666564a4a09d6f6f70685e53bb9e8280807e534f4b816e5f68696a")
 
 
 def upright(im):
     blocks = im.convert("RGB").resize((3, 4), Image.Resampling.BOX).tobytes()
-    return im.size == (3024, 4032) and all(abs(p - q) < 8 for p, q in zip(blocks, UPRIGHT))
+    return im.size == (3024, 4032) and all(abs(p - q) < 20 for p, q in zip(blocks, UPRIGHT))
 
 
 def sha(path):
