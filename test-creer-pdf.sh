@@ -120,13 +120,15 @@ def page_image(page):
 
 
 def a4_wide(page, dots=1.0):
-    """Shown 21 cm wide (a turned page swaps its sides), as tall as the image's proportions."""
+    """Shown as wide as an A4 sheet turned the same way (21 cm for a portrait or square image,
+    29.7 cm for a landscape one; a turned page swaps its sides), as tall as its proportions."""
     mb = [float(v) for v in page.mediabox]
     w, h = (mb[2] - mb[0]) / 72 * 2.54, (mb[3] - mb[1]) / 72 * 2.54
     if int(page.obj.get("/Rotate", 0)) % 180:
         w, h = h, w
     im = page_image(page)[0]
-    return abs(w - 21) < 0.01 and abs(h - 21 * im.height / im.width * dots) < 0.05, f"{w:.1f} x {h:.1f} cm"
+    want = 21 if im.height * dots >= im.width else 29.7
+    return abs(w - want) < 0.01 and abs(h - want * im.height / im.width * dots) < 0.05, f"{w:.1f} x {h:.1f} cm"
 
 
 def same(a, b):
@@ -194,13 +196,15 @@ if out:
         check(same(page_image(p[3])[0], pattern(alpha=True)), "capture d'écran : chaque point identique, transparence comprise")
         if len(p) == pages:
             sizes = [a4_wide(p[i]) for i in range(2, 3 + has_heic + 1)]
-            check(all(ok for ok, _ in sizes), f"pages photo : 21 cm de large, proportions gardées ({[t for _, t in sizes]})")
+            check(all(ok for ok, _ in sizes), f"pages photo : largeur A4 dans leur sens (portrait 21 cm, paysage 29,7 cm), proportions gardées ({[t for _, t in sizes]})")
         if has_heic and len(p) == pages:
             im, x, _ = page_image(p[4])
             check(upright(im), f"HEIC : la photo couchée est à l'endroit, couleurs justes ({im.size[0]}x{im.size[1]})")
             got = desc(icc(x)) if icc(x) else "aucun profil"
             check(got == desc(p3), f"HEIC : profil de couleurs de l'iPhone (Display P3) gardé ({got.strip()})")
             check(x.get("/Filter") == "/DCTDecode", f"HEIC : rangée en JPEG ({x.get('/Filter')})")
+            n, heic_n = len(x.read_raw_bytes()), os.path.getsize(PHOTO)
+            check(n < 1.2 * heic_n, f"HEIC : à peu près le poids du HEIC ({n / 1e6:.2f} Mo pour {heic_n / 1e6:.2f} Mo)")
         want_c, want_m = ts("2019-05-12T14:03:22+02:00"), ts("2018-07-04T12:00:00+00:00")
         st = os.stat(out[0])
         check(int(getattr(st, "st_birthtime", -1)) == want_c, "date de création = prise de vue la plus ancienne (12/05/2019)")
@@ -238,7 +242,7 @@ if out:
             for i, (w, lab) in enumerate(zip(want, labels)):
                 check(same(page_image(p[i])[0], w), f"{lab} : chaque point identique")
             sizes = [a4_wide(pg, 204 / 98 if i == 5 else 1.0) for i, pg in enumerate(p)]
-            check(all(ok for ok, _ in sizes), f"web et scans : 21 cm de large partout ({[t for _, t in sizes]})")
+            check(all(ok for ok, _ in sizes), f"web et scans : largeur A4 dans leur sens partout ({[t for _, t in sizes]})")
 
 # --- 3. More than 8 bits per color -------------------------------------------------------------
 def png16(path, ctype):
@@ -293,11 +297,16 @@ pdf = pikepdf.new()
 pdf.add_blank_page()
 pdf.Root.StructTreeRoot = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.StructTreeRoot))
 pdf.Root.Lang = "fr-FR"
+with pdf.open_outline() as outline:
+    outline.root.append(pikepdf.OutlineItem("Chapitre 1", 0))
+with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
+    meta["dc:title"] = "Contrat"
+pdf.docinfo["/Title"], pdf.docinfo["/Author"] = "Contrat", "Michael"  # after XMP, which rewrites them
 pdf.Root.Names = pikepdf.Dictionary(Dests=pikepdf.Dictionary(Names=pikepdf.Array(["chap2", pikepdf.Array([pdf.pages[0].obj, pikepdf.Name.Fit])])))
 pdf.save(f"{D}/balise.pdf")
 out, dialogs, _ = run(f"{D}/balise.pdf")
-check(len(out) == 1 and all(w in dialogs for w in ("accessibilité", "langue", "liens internes")),
-      f"balisage, langue, liens internes nommés : PDF créé avec l'alerte ({said(dialogs)})")
+check(len(out) == 1 and all(w in dialogs for w in ("signets", "titre", "auteur", "XMP", "accessibilité", "langue", "liens internes")),
+      f"signets, titre, auteur, XMP, balisage, langue, liens internes nommés : PDF créé avec l'alerte ({said(dialogs)})")
 
 make_pdf(f"{D}/abime.pdf", ["X1"])
 raw = open(f"{D}/abime.pdf", "rb").read()

@@ -64,12 +64,14 @@
 # The selected PDFs and images, in click order, become one PDF next to the first file,
 # named like Apple ("doc1 2.pdf"). PDF pages are copied byte for byte; every image page is
 # compared with its source before use, and an image that cannot be proven identical is
-# refused. Only HEIC-like photos, which a PDF cannot hold, become a JPEG compressed like macOS does. The result carries the oldest creation date and the oldest modification date
+# refused. Only HEIC-like photos, which a PDF cannot hold, become a JPEG about as heavy as the HEIC. The result carries the oldest creation date and the oldest modification date
 # found among the sources (Finder dates, photo capture date, dates written inside a PDF).
 # The work runs in img2pdf's own Python, which holds img2pdf, Pillow and pikepdf.
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
-for t in img2pdf qpdf exiftool; do
-  if [ ! -x "/opt/homebrew/bin/$t" ]; then
+for t in img2pdf qpdf exiftool mozjpeg; do
+  p=/opt/homebrew/bin/$t
+  [ "$t" = mozjpeg ] &amp;&amp; p=/opt/homebrew/opt/mozjpeg/bin/cjpeg  # keg-only: never in bin
+  if [ ! -x "$p" ]; then
     osascript -e 'on run argv' -e activate -e 'display dialog (item 1 of argv) buttons {"OK"} default button "OK" with icon caution with title "Créer un PDF"' \
       -e 'end run' "$t est introuvable. Dans le Terminal : brew install $t"$'\n\nAucun PDF créé.' &gt;/dev/null
     exit 0
@@ -84,6 +86,7 @@ from PIL import Image, ImageChops, ImageOps, ImageStat
 
 QPDF = "/opt/homebrew/bin/qpdf"
 EXIFTOOL = "/opt/homebrew/bin/exiftool"
+CJPEG = "/opt/homebrew/opt/mozjpeg/bin/cjpeg"
 
 
 def dialog(text):
@@ -104,15 +107,19 @@ def refuse(text):
 Image.MAX_IMAGE_PIXELS = None  # big scans and panoramas are legitimate input
 logging.disable(logging.WARNING)
 ANGLE = {1: 0, 3: 180, 6: 90, 8: 270}  # EXIF orientation -&gt; clockwise page rotation
-A4_WIDTH = 595.276  # points
+A4_WIDTH, A4_HEIGHT = 595.276, 841.89  # points
 
 
 def a4_wide(turned):
-    """img2pdf layout: once displayed, every image page is as wide as an A4 sheet and as tall as
-    the image's proportions say (Michael 2026-10-25). Only the page size changes, never a pixel."""
+    """img2pdf layout: once displayed, every image page is as wide as an A4 sheet turned the
+    same way, 21 cm for a portrait or square image, 29.7 cm for a landscape one, and as tall as
+    the image's proportions say (Michael 2026-10-25 and 10-27). Only the page size changes,
+    never a pixel."""
     def layout(w, h, dpi):  # w, h: the image as stored, before the page turns it
         w, h = w / dpi[0], h / dpi[1]  # a fax has taller than wide dots (204 x 98 dpi)
-        pw, ph = (A4_WIDTH * w / h, A4_WIDTH) if turned else (A4_WIDTH, A4_WIDTH * h / w)
+        dw, dh = (h, w) if turned else (w, h)  # as displayed
+        width = A4_WIDTH if dw &lt;= dh else A4_HEIGHT
+        pw, ph = (width * dh / dw, width) if turned else (width, width * dh / dw)
         return pw, ph, pw, ph
     return layout
 notes, made = [], []
@@ -175,9 +182,14 @@ def add_pdf(path, name):
                 notes.append(f"« {name} » : signature électronique, elle ne vaut plus dans le PDF assemblé, garde l'original")
                 break
             fields.extend(f.get("/Kids", []))
-        # Michael 2026-10-27: a simple alert for what the merge drops beyond bookmarks, title, author.
-        names = pdf.Root.get("/Names")
+        # Michael 2026-10-27: a simple alert for what the merge drops, since he may delete the originals.
+        names, info, marks = pdf.Root.get("/Names"), pdf.trailer.get("/Info") or {}, pdf.Root.get("/Outlines")
         lost = [what for what, there in (
+            ("signets", marks is not None and "/First" in marks),
+            ("titre", bool(str(info.get("/Title", "")).strip())),
+            ("auteur", bool(str(info.get("/Author", "")).strip())),
+            ("sujet ou mots-clés", any(str(info.get(k, "")).strip() for k in ("/Subject", "/Keywords"))),
+            ("métadonnées XMP", "/Metadata" in pdf.Root),
             ("balisage d'accessibilité", "/StructTreeRoot" in pdf.Root),
             ("langue du document", "/Lang" in pdf.Root),
             ("liens internes nommés", "/Dests" in pdf.Root or (names is not None and "/Dests" in names))) if there]
@@ -299,22 +311,27 @@ def add_image(path, name, k, i, work):
         if r.returncode or not os.path.isfile(src):
             refuse(f"« {name} » n'est ni un PDF ni une image lisible.")
         path, k = src, "png"
-        # Michael 2026-10-27: a HEIC (or AVIF, RAW) becomes a JPEG compressed like macOS does (its
-        # own scans measure quality 95 to 96 with half-resolution color, 4:2:0); only images
-        # with transparency stay lossless.
+        # Michael 2026-10-27: a HEIC (or AVIF, RAW) becomes a JPEG about as heavy as the HEIC:
+        # mozjpeg, quality 88, half-resolution color (4:2:0), a fixed setting; only images with
+        # transparency stay lossless.
         try:
             up = ImageOps.exif_transpose(Image.open(path))
             if up.mode in ("RGBA", "LA") and up.getchannel("A").getextrema() == (255, 255):
                 up = up.convert(up.mode[:-1])  # sips may add a fully opaque alpha: it holds nothing
             if up.mode in ("RGB", "L"):
-                jpg = os.path.join(work, f"{i}.jpg")
-                keep = {"icc_profile": up.info["icc_profile"]} if up.info.get("icc_profile") else {}
-                up.save(jpg, quality=96, subsampling=2, **keep)
-                # The JPEG must stay close to the decoded photo: quality 96 measures 47 dB on an
-                # iPhone photo and 44 dB on pure noise.
+                jpg, raw = os.path.join(work, f"{i}.jpg"), os.path.join(work, f"{i}.pnm")
+                up.save(raw, "PPM")
+                cmd = [CJPEG, "-quality", "88", "-sample", "2x2", "-outfile", jpg]
+                if up.info.get("icc_profile"):
+                    with open(os.path.join(work, f"{i}.icc"), "wb") as f:
+                        f.write(up.info["icc_profile"])
+                    cmd += ["-icc", f.name]
+                subprocess.run(cmd + [raw], check=True, capture_output=True)
+                # Below 20 dB the conversion went wrong: an iPhone photo measures 41 dB, pure
+                # noise 28 dB.
                 with Image.open(jpg) as back:
                     mse = sum(v * v for v in ImageStat.Stat(ImageChops.difference(up, back)).rms) / len(up.getbands())
-                if mse and 10 * math.log10(255 ** 2 / mse) &lt; 40:
+                if mse and 10 * math.log10(255 ** 2 / mse) &lt; 20:
                     refuse(f"« {name} » ne peut pas être converti fidèlement en JPEG.")
                 path, k = jpg, "jpeg"
         except Refused:

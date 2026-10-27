@@ -19,8 +19,10 @@ BREW=/opt/homebrew/bin/brew
 problems=0
 
 # The actions call these Homebrew tools by full path: install whichever is missing.
-for t in qpdf img2pdf exiftool; do
-  [ -x "/opt/homebrew/bin/$t" ] && continue
+for t in qpdf img2pdf exiftool mozjpeg; do
+  p=/opt/homebrew/bin/$t
+  [ "$t" = mozjpeg ] && p=/opt/homebrew/opt/mozjpeg/bin/cjpeg  # keg-only: never in bin
+  [ -x "$p" ] && continue
   if [ -x "$BREW" ] && "$BREW" install "$t"; then
     continue
   fi
