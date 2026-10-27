@@ -64,7 +64,7 @@
 # The selected PDFs and images, in click order, become one PDF next to the first file,
 # named like Apple ("doc1 2.pdf"). PDF pages are copied byte for byte; every image page is
 # compared with its source before use, and an image that cannot be proven identical is
-# refused. Only HEIC-like photos, which a PDF cannot hold, become a quality 98 JPEG. The result carries the oldest creation date and the oldest modification date
+# refused. Only HEIC-like photos, which a PDF cannot hold, become a JPEG compressed like macOS does. The result carries the oldest creation date and the oldest modification date
 # found among the sources (Finder dates, photo capture date, dates written inside a PDF).
 # The work runs in img2pdf's own Python, which holds img2pdf, Pillow and pikepdf.
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
@@ -175,6 +175,14 @@ def add_pdf(path, name):
                 notes.append(f"« {name} » : signature électronique, elle ne vaut plus dans le PDF assemblé, garde l'original")
                 break
             fields.extend(f.get("/Kids", []))
+        # Michael 2026-10-27: a simple alert for what the merge drops beyond bookmarks, title, author.
+        names = pdf.Root.get("/Names")
+        lost = [what for what, there in (
+            ("balisage d'accessibilité", "/StructTreeRoot" in pdf.Root),
+            ("langue du document", "/Lang" in pdf.Root),
+            ("liens internes nommés", "/Dests" in pdf.Root or (names is not None and "/Dests" in names))) if there]
+        if lost:
+            notes.append(f"« {name} » : {', '.join(lost)} non repris, les pages sont intactes")
         return len(pdf.pages)
 
 
@@ -291,8 +299,9 @@ def add_image(path, name, k, i, work):
         if r.returncode or not os.path.isfile(src):
             refuse(f"« {name} » n'est ni un PDF ni une image lisible.")
         path, k = src, "png"
-        # Michael 2026-10-25: a HEIC (or AVIF, RAW) becomes a JPEG of quality 98, half the size of
-        # its lossless pixels and no visible loss; only images with transparency stay lossless.
+        # Michael 2026-10-27: a HEIC (or AVIF, RAW) becomes a JPEG compressed like macOS does (its
+        # own scans measure quality 95 to 96 with half-resolution color, 4:2:0); only images
+        # with transparency stay lossless.
         try:
             up = ImageOps.exif_transpose(Image.open(path))
             if up.mode in ("RGBA", "LA") and up.getchannel("A").getextrema() == (255, 255):
@@ -300,8 +309,9 @@ def add_image(path, name, k, i, work):
             if up.mode in ("RGB", "L"):
                 jpg = os.path.join(work, f"{i}.jpg")
                 keep = {"icc_profile": up.info["icc_profile"]} if up.info.get("icc_profile") else {}
-                up.save(jpg, quality=98, subsampling=0, **keep)
-                # The JPEG must stay close to the decoded photo: quality 98 measures 43 to 57 dB.
+                up.save(jpg, quality=96, subsampling=2, **keep)
+                # The JPEG must stay close to the decoded photo: quality 96 measures 47 dB on an
+                # iPhone photo and 44 dB on pure noise.
                 with Image.open(jpg) as back:
                     mse = sum(v * v for v in ImageStat.Stat(ImageChops.difference(up, back)).rms) / len(up.getbands())
                 if mse and 10 * math.log10(255 ** 2 / mse) &lt; 40:

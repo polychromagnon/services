@@ -19,8 +19,8 @@ cat >"$T/bin/osascript" <<'EOF'
 printf '%s\n' "${@: -1}" >>"$DIALOG_LOG"
 EOF
 chmod +x "$T/bin/osascript"
-"$PY" -I - "$T" <<'PY'
-import hashlib, io, os, re, struct, subprocess, sys, time, zlib
+"$PY" -I - "$T" "$HERE" <<'PY'
+import hashlib, io, os, re, shutil, struct, subprocess, sys, time, zlib
 from datetime import datetime, timezone
 import img2pdf, pikepdf, PIL
 from PIL import Image, ImageCms, ImageOps
@@ -134,12 +134,15 @@ def same(a, b):
     return a.size == b.size and a.convert(mode).tobytes() == b.convert(mode).tobytes()
 
 
-def near(a, b):
-    """Lossy formats (HEIC): same size and each quarter of about the same color."""
-    if a.size != b.size:
-        return False
-    a, b = a.convert("RGB").resize((2, 2), Image.Resampling.BOX), b.convert("RGB").resize((2, 2), Image.Resampling.BOX)
-    return all(abs(p - q) < 40 for p, q in zip(a.tobytes(), b.tobytes()))
+# Michael's own iPhone photo, stored on its side ("Rotate 90 CW"), Display P3. Upright it is
+# 3024 x 4032 and, averaged to 3 x 4 blocks, has these colors (checked by eye on the Mac).
+PHOTO = os.path.normpath(os.path.join(sys.argv[2], "..", "test-HEIC", "img.heic"))
+UPRIGHT = bytes.fromhex("6d6e6e969a9d797c7b666564a4a09d6f6f70685e53bb9e8280807e534f4b816e5f68696a")
+
+
+def upright(im):
+    blocks = im.convert("RGB").resize((3, 4), Image.Resampling.BOX).tobytes()
+    return im.size == (3024, 4032) and all(abs(p - q) < 8 for p, q in zip(blocks, UPRIGHT))
 
 
 def sha(path):
@@ -162,8 +165,11 @@ ex[274] = 6
 ex.get_ifd(0x8769).update({0x9003: "2019:05:12 14:03:22", 0x9011: "+02:00"})
 turned.save(f"{D}/photo.jpg", quality=92, exif=ex, icc_profile=srgb)
 pattern(alpha=True).save(f"{D}/capture.png")
-turned.save(f"{D}/p3.jpg", quality=95, exif=ex, icc_profile=p3)
-has_heic = heic(f"{D}/p3.jpg", f"{D}/iphone.heic")
+has_heic = os.path.isfile(PHOTO)
+if has_heic:
+    shutil.copy(PHOTO, f"{D}/iphone.heic")
+else:
+    check(False, f"HEIC : photo d'essai introuvable ({PHOTO})")
 mix = [f"{D}/a.pdf", f"{D}/photo.jpg", f"{D}/capture.png"] + [f"{D}/iphone.heic"] * has_heic + [f"{D}/b.pdf"]
 pages = 5 + has_heic
 for f in mix:
@@ -190,7 +196,7 @@ if out:
             check(all(ok for ok, _ in sizes), f"pages photo : 21 cm de large, proportions gardées ({[t for _, t in sizes]})")
         if has_heic and len(p) == pages:
             im, x, _ = page_image(p[4])
-            check(near(im, up), f"HEIC : page à l'endroit, couleurs justes ({im.size[0]}x{im.size[1]})")
+            check(upright(im), f"HEIC : la photo couchée est à l'endroit, couleurs justes ({im.size[0]}x{im.size[1]})")
             got = desc(icc(x)) if icc(x) else "aucun profil"
             check(got == desc(p3), f"HEIC : profil de couleurs de l'iPhone (Display P3) gardé ({got.strip()})")
             check(x.get("/Filter") == "/DCTDecode", f"HEIC : rangée en JPEG ({x.get('/Filter')})")
@@ -281,6 +287,16 @@ pdf.save(f"{D}/signe.pdf")
 out, dialogs, _ = run(f"{D}/signe.pdf")
 check(len(out) == 1 and all(w in dialogs for w in ("pièces jointes", "calques", "signature", "garde l'original")),
       f"pièce jointe, calques, signature : PDF créé avec l'alerte ({said(dialogs)})")
+
+pdf = pikepdf.new()
+pdf.add_blank_page()
+pdf.Root.StructTreeRoot = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.StructTreeRoot))
+pdf.Root.Lang = "fr-FR"
+pdf.Root.Names = pikepdf.Dictionary(Dests=pikepdf.Dictionary(Names=pikepdf.Array(["chap2", pikepdf.Array([pdf.pages[0].obj, pikepdf.Name.Fit])])))
+pdf.save(f"{D}/balise.pdf")
+out, dialogs, _ = run(f"{D}/balise.pdf")
+check(len(out) == 1 and all(w in dialogs for w in ("accessibilité", "langue", "liens internes")),
+      f"balisage, langue, liens internes nommés : PDF créé avec l'alerte ({said(dialogs)})")
 
 make_pdf(f"{D}/abime.pdf", ["X1"])
 raw = open(f"{D}/abime.pdf", "rb").read()
