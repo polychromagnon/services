@@ -308,6 +308,20 @@ out, dialogs, _ = run(f"{D}/balise.pdf")
 check(len(out) == 1 and all(w in dialogs for w in ("signets", "titre", "auteur", "XMP", "accessibilité", "langue", "liens internes")),
       f"signets, titre, auteur, XMP, balisage, langue, liens internes nommés : PDF créé avec l'alerte ({said(dialogs)})")
 
+titled = []
+for n in range(5):  # five titled PDFs and one with layers: the serious note comes first
+    titled.append(f"{D}/titre{n}.pdf")
+    make_pdf(titled[-1], [f"T{n}"], {"/Title": f"Titre {n}"})
+pdf = pikepdf.new()
+pdf.add_blank_page()
+pdf.Root.OCProperties = pikepdf.Dictionary(OCGs=pikepdf.Array(), D=pikepdf.Dictionary())
+pdf.save(f"{D}/calque.pdf")
+out, dialogs, _ = run(*titled[:3], f"{D}/calque.pdf", *titled[3:])
+lines = dialogs.splitlines()
+at = lambda word: next((i for i, l in enumerate(lines) if word in l), -1)
+check(len(out) == 1 and -1 < at("calques") < at("titre non repris") and sum(l.startswith("titre non repris") for l in lines) == 1 and "et 2 autres" in dialogs,
+      f"beaucoup de PDF : l'avertissement grave d'abord, une seule ligne par élément perdu ({said(dialogs)})")
+
 make_pdf(f"{D}/abime.pdf", ["X1"])
 raw = open(f"{D}/abime.pdf", "rb").read()
 open(f"{D}/abime.pdf", "wb").write(raw[:raw.rindex(b"startxref")] + b"startxref\n999\n%%EOF\n")  # broken index

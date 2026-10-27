@@ -122,7 +122,7 @@ def a4_wide(turned):
         pw, ph = (width * dh / dw, width) if turned else (width, width * dh / dw)
         return pw, ph, pw, ph
     return layout
-notes, made = [], []
+notes, made, dropped = [], [], {}  # dropped: lost item -&gt; files
 
 
 def kind(path):
@@ -194,7 +194,8 @@ def add_pdf(path, name):
             ("langue du document", "/Lang" in pdf.Root),
             ("liens internes nommés", "/Dests" in pdf.Root or (names is not None and "/Dests" in names))) if there]
         if lost:
-            notes.append(f"« {name} » : {', '.join(lost)} non repris, les pages sont intactes")
+            for what in lost:
+                dropped.setdefault(what, []).append(name)
         return len(pdf.pages)
 
 
@@ -511,6 +512,10 @@ def run(files, work):
         notes.append("la date de création du fichier n'a pas pu être recalée")
     if int(st.st_mtime) != modified:
         notes.append("la date de modification du fichier n'a pas pu être recalée")
+    # One line per lost item, after the serious notes, so a hundred titled PDFs cannot bury them.
+    for what, names in dropped.items():
+        shown = ", ".join(f"« {n} »" for n in names[:3]) + (f" et {len(names) - 3} autres" if len(names) &gt; 3 else "")
+        notes.append(f"{what} non repris (les pages sont intactes) : {shown}")
     if notes:
         dialog(f"« {os.path.basename(target)} » est créé, mais à vérifier :\n" + "\n".join(notes))
 
