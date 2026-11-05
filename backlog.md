@@ -8,3 +8,4 @@
 - [refoulé par trust] Créer un PDF : refuser un JPEG tronqué (photo coupée par AirDrop ou un téléchargement) comme les autres formats tronqués, « Aucun PDF créé. » — hors intention du cycle : règle nouvelle ; aujourd'hui le PDF garde les octets de la source.
 - [refoulé par trust] Rotation : tenir une seconde interruption pendant la remise depuis la copie de sécurité (deux signaux de suite) — hors intention du cycle : soupape de trust, cause revenue trois fois, à toi de dire.
 - [refoulé par trust] Créer un PDF : variante « créer et alerter » pour un JPEG tronqué (ligne « semble coupé » dans l'alerte) — hors intention du cycle : règle nouvelle.
+- [refoulé par trust] Rotation : après un arrêt au milieu d'un lot, afficher les PDF déjà tournés (bilan partiel), pour qu'une relance ne les tourne pas deux fois — hors intention du cycle : soupape de trust, même cause revenue.
