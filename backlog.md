@@ -5,3 +5,4 @@
 - [refoulé par trust] Rotation : accepter un PDF dont les seuls avertissements qpdf sont des cases d'index vides inutilisées (même règle que Créer un PDF, 2026-10-25) — hors intention du cycle : nouvelle règle de produit.
 - [refoulé par trust] Rotation : recopier les flux tels quels (`--stream-data=preserve`) au lieu de les écrire décompressés, pour que le fichier ne grossisse pas — hors intention du cycle : changement de comportement non demandé.
 - [refoulé par trust] Créer un PDF : alerter aussi pour `/PageLabels`, `/OpenAction`, JavaScript, `/OutputIntents` (PDF/A) et les permissions d'un PDF à mot de passe propriétaire — hors intention du cycle : ta liste du 2026-10-27 est fermée.
+- [refoulé par trust] Créer un PDF : refuser un JPEG tronqué (photo coupée par AirDrop ou un téléchargement) comme les autres formats tronqués, « Aucun PDF créé. » — hors intention du cycle : règle nouvelle ; aujourd'hui le PDF garde les octets de la source.

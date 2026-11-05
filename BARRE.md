@@ -42,6 +42,9 @@
 - [spec 2026-11-05] Rotation : quand le dossier de verrou garde la seule copie intacte, le message ne dira plus « supprimez le dossier » mais nommera la copie ; ship le corrige. Raison : sans perte.
 - [spec 2026-11-05] Créer un PDF : une image couchée par son EXIF et à points non carrés (fax, certains scans) sort étirée quand elle passe par la seconde voie (fax 60 x 40 couché : 21 x 65,6 cm au lieu de 29,7 x 21,4 cm) ; ship le corrige dans ce cycle. Raison : ta décision du 2026-10-25, « un fax n'est pas écrasé ».
 - [spec 2026-11-05] `sync.sh` ne touchera plus jamais aux trois actions `Claude - ask/codeHere/send`, même si git connaît leurs fichiers (aujourd'hui il pourrait les retirer comme doublons) ; ship le corrige. Écarté : seulement reformuler la promesse. Raison : ta règle « elles appartiennent à l'app Claude et restent hors », et c'est l'option sûre et réversible.
+- [spec 2026-11-05] Rotation : la remise à l'identique rétablira aussi la date de création (aujourd'hui seulement la modification), et la copie de sécurité sera écrite sous un nom provisoire puis renommée une fois complète (aujourd'hui un arrêt brutal pendant la copie laisse une copie tronquée sous son vrai nom) ; ship les corrige. Raison : sans perte.
+- [spec 2026-11-05] Créer un PDF : un JPEG tronqué (photo coupée par un transfert) passe tel quel, sans alerte, comme aujourd'hui ; les autres formats tronqués sont refusés. Écarté : refuser aussi le JPEG (mis au backlog). Raison : le PDF garde exactement les octets de la source, rien n'est perdu par rapport à elle ; refuser serait une règle nouvelle.
+- [spec 2026-11-05] Le SPEC ne fige plus le texte exact de chaque mutation de test : il fixe la règle (chaque sous-fait a une mutation qui le fait échouer), ship choisit et prouve. Écarté : corriger la liste une quatrième fois. Raison : elle est revenue en défaut à trois relectures (soupape de trust).
 
 ## 5. État du chantier
 
