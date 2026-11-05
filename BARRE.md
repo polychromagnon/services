@@ -55,14 +55,19 @@
 - [spec 2026-11-05] OUVERT, pour le prochain cycle (soupape de trust : la même cause est revenue trois fois et plus) : la protection de la rotation contre les interruptions. Ce cycle corrige un signal pendant la réécriture et l'arrêt brutal. Restent sans preuve : une seconde interruption pendant la remise depuis la copie (deux Ctrl-C, fermeture de session), et un lot de PDF arrêté au milieu (les PDF déjà tournés ne sont pas nommés ; relancer la même sélection les tournerait une seconde fois). Écris « oui » en fin de ligne pour les mettre au prochain cycle.
 - [spec 2026-11-05] Créer un PDF arrêté pendant l'écriture du résultat (fermeture de session, arrêt forcé) : aujourd'hui un PDF tronqué ou vide reste sous un nom normal, sans message ; ship le corrige (écriture complète sous un nom provisoire qui ne finit pas par `.pdf`, puis nom final par lien dur exclusif). Limite : sur une clé exFAT ou un partage réseau sans liens durs, l'écriture d'aujourd'hui reste. Raison : tu supprimes tes originaux après la fusion.
 - [spec 2026-11-05] Rotation : quand un verrou orphelin garde la copie, le message te dira d'abord « si le PDF ne s'ouvre pas normalement, remets `copie-de-securite.pdf` à sa place », puis seulement de supprimer le dossier.
+- [ship 2026-11-05] Un TIFF orienté sur sa diagonale (EXIF 5 à 8) passe directement par la seconde voie, sans perte (PNG) : Pillow le donne déjà tourné à img2pdf mais avec sa densité d'origine, la page sortait étirée. Écarté : corriger la taille calculée par img2pdf. Raison : la seconde voie, déjà prouvée, suffit.
+- [ship 2026-11-05] Le fichier provisoire de Créer un PDF s'appelle « <nom> (PDF en cours <numéro>) », raccourci si besoin pour tenir dans 255 octets. Raison : lisible si un arrêt brutal le laisse, jamais pris par une rotation de dossier.
+- [ship 2026-11-05] Le message de verrou ajoute « dans le doute, remettez la copie (au pire, la rotation est annulée) », sans sortir du texte que le SPEC impose ; la question d'une remise systématique t'est posée en section 3.
+- [ship 2026-11-05] Liste des mutations ajustée là où le texte indicatif du SPEC ne mordait pas ou n'existait plus (41 au total, toutes attrapées) ; le harnais tourne avec VERIFY_RELAX=1 sur une copie de l'arbre (commande dans CLAUDE.md).
+- [ship 2026-11-05] Relecture du code arrêtée après sa première attaque : elle a relevé des lacunes du SPEC, et ta règle en ton absence dit de figer et de te les poser (section 3). Ses quatre points forts sont réparés, sans nouvelle attaque.
 
 ## 5. État du chantier
 
 > Écrit par le dernier run, verdict en première ligne. Le détail des preuves vit dans `dossier/proof.md` ; ici, seulement ce qui t'oriente.
 
-**Verdict : SPEC prêt** — intention non validée par un humain, essaie le produit pour vérifier qu'il fait ce que tu voulais. Relecture du SPEC : plafond de 12 attaques atteint sans deux attaques propres consécutives (n'a pas convergé : chaque attaque trouvait des preuves plus fines à durcir), et le SPEC a changé après sa dernière attaque.
+**Verdict : bloqué, ship : lacunes du SPEC, PO requis** — intention non validée par un humain, essaie le produit pour vérifier qu'il fait ce que tu voulais. Relecture du SPEC : plafond de 12 attaques atteint sans converger. Relecture du code : une seule attaque, puis gel sur lacunes ; le code a changé après elle (réparations de ses quatre points forts).
 
-- Fait : `SPEC.md` (le comportement que tu as décidé, avec une preuve qui peut échouer pour chaque promesse), recherche d'existant (rien qui fasse déjà ça), 12 relectures adverses.
-- Reste : ship (tests, corrections listées en section 4, preuves), puis send.
-- Bloqué : rien.
-- En attente de ton feu vert : rien pour l'instant ; les lignes OUVERT et les décisions de la section 4 sont à relire quand tu veux.
+- Fait : sept défauts corrigés (fax ou image couchée étirés, PDF partiel laissé par un arrêt, rotation interrompue qui perdait l'original, message de verrou, date de création après remise, copie de sécurité tronquée sous son vrai nom, actions Claude exposées à `sync.sh`) ; suite de tests VM (232 contrôles, tous verts, aussi sous pikepdf 10.0.0 et 10.16.0) ; 41 mutations toutes attrapées ; `preuves-mac.sh` ; preuve d'exécution dans `proof.lock`, détail dans `proof.md`.
+- Reste : réponds aux six questions de la section 3 ; lance `bash ~/Developer/scripts/services/preuves-mac.sh` sur ton Mac et renvoie ce qu'il affiche ; puis relance `/dev`.
+- Bloqué : la release (send) attend tes réponses.
+- En attente de ton feu vert : fusion de la branche `claude/wizardly-faraday-hk83yo` dans `main` (rien n'a été poussé sur `main`).
