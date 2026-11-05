@@ -356,8 +356,13 @@ def add_image(path, name, k, i, work):
         refuse(f"« {name} » n'est pas une image lisible.")
     if deep and k != "png":
         refuse(f"« {name} » a plus de 8 bits par couleur et ne peut pas être inséré sans perte.")
-    # First way: img2pdf stores the file as it is (JPEG and most PNG untouched).
+    # First way: img2pdf stores the file as it is (JPEG and most PNG untouched). Not for a TIFF
+    # turned across its diagonal (EXIF 5 to 8): Pillow hands img2pdf its pixels already turned
+    # but its dot density as stored, so the page would come out stretched.
     try:
+        if k == "tiff" and any(turn_of(im) in (5, 6, 7, 8) for j in range(frames) if im.seek(j) is None):
+            raise ValueError("TIFF turned across its diagonal")
+        im.seek(0)
         turned = ANGLE.get(im.getexif().get(274, 1)) in (90, 270)
         pdf = img2pdf.convert(path, rotation=img2pdf.Rotation.ifvalid, first_frame_only=(k != "tiff"),
                               layout_fun=a4_wide(turned))
