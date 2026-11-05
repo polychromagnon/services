@@ -1,0 +1,40 @@
+# Expected self-test lines in the VM (status, then label), in order. A line matches label L when,
+# without its status, it equals L or starts with L followed by " (".
+ÉCHEC	HEIC : photo d'essai introuvable
+OK	mélange : un seul PDF, nommé comme chez Apple
+ÉCHEC	mélange : aucune alerte
+OK	mélange : 5 pages
+OK	mélange : pages PDF recopiées à l'octet près, dans l'ordre des clics
+OK	JPEG : recopié à l'octet près, redressé par la page
+OK	JPEG : profil de couleurs gardé
+OK	capture d'écran : chaque point identique, transparence comprise
+OK	pages photo : largeur A4 dans leur sens (portrait 21 cm, paysage 29,7 cm), proportions gardées
+ÉCHEC	date de création = prise de vue la plus ancienne (12/05/2019)
+OK	date de modification = date interne du PDF la plus ancienne (04/07/2018)
+OK	dates internes du PDF identiques
+OK	originaux intacts
+ÉCHEC	web et scans : PDF créé sans alerte
+OK	web et scans : 8 pages, GIF animé = 1 page, scan de 2 pages = 2
+OK	logo PNG transparent : chaque point identique
+OK	GIF (1re image) : chaque point identique
+OK	WebP : chaque point identique
+OK	scan TIFF page 1 : chaque point identique
+OK	scan TIFF page 2 (noir et blanc) : chaque point identique
+OK	TIFF fax : chaque point identique
+OK	TIFF couché, redressé une seule fois : chaque point identique
+OK	selfie en miroir, remis à l'endroit : chaque point identique
+OK	web et scans : largeur A4 dans leur sens partout
+ÉCHEC	PNG 16 bits : gardé en 16 bits, données recopiées telles quelles
+OK	PNG 16 bits transparent : refusé avec un message, rien créé
+OK	fichier non lisible au milieu : rien créé, fichier nommé
+OK	PDF protégé par mot de passe : refusé
+OK	dossier sélectionné : refusé
+OK	dossier protégé en écriture : refusé, rien créé
+OK	pièce jointe, calques, signature : PDF créé avec l'alerte
+OK	signets, titre, auteur, XMP, balisage, langue, liens internes nommés : PDF créé avec l'alerte
+OK	beaucoup de PDF : l'avertissement grave d'abord, une seule ligne par élément perdu
+OK	PDF abîmé : réparé, PDF créé, fichier nommé
+OK	PDF de macOS à case vide inutilisée : pas d'alerte
+OK	case vide utilisée : alerte
+OK	nom déjà pris : « b 3.pdf »
+ÉCHEC	photo HEIC de 12 Mpx : PDF créé
