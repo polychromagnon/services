@@ -79,7 +79,7 @@ for t in img2pdf qpdf exiftool mozjpeg; do
 done
 PY=$(sed -n '1s/^#! *//p' /opt/homebrew/bin/img2pdf)
 exec "$PY" -I - "$@" &lt;&lt;'PY'
-import io, json, logging, os, re, shutil, subprocess, sys, tempfile, time
+import io, json, logging, os, re, shutil, signal, subprocess, sys, tempfile, time
 from datetime import datetime, timedelta, timezone
 import img2pdf, math, pikepdf
 from PIL import Image, ImageChops, ImageOps, ImageStat
@@ -122,7 +122,7 @@ def a4_wide(turned):
         pw, ph = (width * dh / dw, width) if turned else (width, width * dh / dw)
         return pw, ph, pw, ph
     return layout
-notes, made, dropped = [], [], {}  # dropped: lost item -&gt; files
+notes, made, dropped, pending = [], [], {}, []  # dropped: lost item -&gt; files; pending: temporary files to remove
 
 
 def kind(path):
@@ -442,6 +442,25 @@ def pdfdate(t):
     return d.strftime("D:%Y%m%d%H%M%S") + f"{z[:3]}'{z[3:]}'"
 
 
+def claim(folder, stem, final):
+    """Fallback without hard links: creating the final name exclusively claims it."""
+    n = 1
+    while True:
+        target = os.path.join(folder, f"{stem}.pdf" if n == 1 else f"{stem} {n}.pdf")
+        try:
+            out = open(target, "xb")
+            break
+        except FileExistsError:
+            n += 1
+    try:
+        with out, open(final, "rb") as src:
+            shutil.copyfileobj(src, out)
+    except OSError:
+        os.remove(target)
+        refuse(f"Écriture impossible dans « {folder} » (disque plein ?).")
+    return target
+
+
 def run(files, work):
     parts, expected = [], 0
     for i, f in enumerate(files, 1):
@@ -487,27 +506,37 @@ def run(files, work):
         pdf.docinfo["/ModDate"] = pdfdate(modified)
         pdf.save(final, compress_streams=False, stream_decode_level=pikepdf.StreamDecodeLevel.none)
 
-    # Same naming as Apple: "doc1.pdf", or "doc1 2.pdf", "doc1 3.pdf"... when taken. Creating
-    # the file exclusively claims the name, even if the action runs twice at once.
+    # Same naming as Apple: "doc1.pdf", or "doc1 2.pdf", "doc1 3.pdf"... when taken. The PDF is
+    # written whole under a temporary name that never ends in .pdf (a folder rotation takes
+    # *.pdf), then takes its final name by a hard link, which fails when the name is taken:
+    # neither a second launch nor an interruption can leave a partial file under a final name.
     folder = os.path.dirname(files[0])
     stem = os.path.splitext(os.path.basename(files[0]))[0]
-    n = 1
-    while True:
-        target = os.path.join(folder, f"{stem}.pdf" if n == 1 else f"{stem} {n}.pdf")
-        try:
-            out = open(target, "xb")
-            break
-        except FileExistsError:
-            n += 1
-        except OSError:
-            refuse(f"Impossible d'écrire dans « {folder} » (dossier protégé ou disque en lecture seule).")
+    temp = os.path.join(folder, f"{stem} (PDF en cours {os.getpid()})")
+    try:
+        out = open(temp, "xb")
+    except OSError:
+        refuse(f"Impossible d'écrire dans « {folder} » (dossier protégé ou disque en lecture seule).")
+    pending.append(temp)
     try:
         with out, open(final, "rb") as src:
             shutil.copyfileobj(src, out)
     except OSError:
-        os.remove(target)
         refuse(f"Écriture impossible dans « {folder} » (disque plein ?).")
+    n = 1
+    while True:
+        target = os.path.join(folder, f"{stem}.pdf" if n == 1 else f"{stem} {n}.pdf")
+        try:
+            os.link(temp, target)
+            break
+        except FileExistsError:
+            n += 1
+        except OSError:  # no hard links here (exFAT, some shares): claim the final name directly
+            target = claim(folder, stem, final)
+            break
     made.append(target)
+    os.remove(temp)
+    pending.remove(temp)
 
     # File dates: modification first, creation last, because lowering the modification date
     # below the creation date drags the creation date down with it.
@@ -531,8 +560,14 @@ def run(files, work):
         dialog(f"« {os.path.basename(target)} » est créé, mais à vérifier :\n" + "\n".join(notes))
 
 
+def stop(signum, frame):
+    raise SystemExit(128 + signum)  # closing the session or stopping the action: clean up first
+
+
 files = sys.argv[1:]
 if files:
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(s, stop)
     work = tempfile.mkdtemp()
     try:
         run(files, work)
@@ -543,6 +578,11 @@ if files:
         dialog(f"« {os.path.basename(made[0])} » est créé, mais à vérifier : {why}" if made else f"Créer un PDF : {why}.\n\nAucun PDF créé.")
     finally:
         shutil.rmtree(work, ignore_errors=True)
+        for p in pending:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 PY
 </string>
 					<key>CheckedForUserDefaultShell</key>
