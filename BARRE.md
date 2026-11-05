@@ -40,6 +40,7 @@
 - [spec 2026-11-05] Rotation d'un PDF de macOS (scan, Aperçu) dont qpdf signale des cases d'index vides : la rotation le refuse aujourd'hui comme « corrompu » (fichier intact), alors que Créer un PDF l'accepte sans alerte depuis ta décision du 2026-10-25 ; gardé tel quel, mis au backlog. Écarté : étendre ta règle à la rotation. Raison : c'est une règle de produit, et le refus ne perd rien.
 - [spec 2026-11-05] Rotation : les flux du PDF sont réécrits décompressés (`--compress-streams=n`), le fichier peut beaucoup grossir (2,7 Ko → 340 Ko mesuré sur un PDF de texte), sans perte ; gardé tel quel, mis au backlog. Écarté : recopier les flux tels quels comme Créer un PDF. Raison : je ne sais pas si c'était voulu.
 - [spec 2026-11-05] Rotation : quand le dossier de verrou garde la seule copie intacte, le message ne dira plus « supprimez le dossier » mais nommera la copie ; ship le corrige. Raison : sans perte.
+- [spec 2026-11-05] Créer un PDF : une image couchée par son EXIF et à points non carrés (fax, certains scans) sort étirée quand elle passe par la seconde voie (fax 60 x 40 couché : 21 x 65,6 cm au lieu de 29,7 x 21,4 cm) ; ship le corrige dans ce cycle. Raison : ta décision du 2026-10-25, « un fax n'est pas écrasé ».
 
 ## 5. État du chantier
 
