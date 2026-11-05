@@ -48,8 +48,8 @@ def main():
     check(len(date_lines) == 4 and all(DATE_ONLY.search(t) for t in date_lines),
           "F11 les quatre ÉCHEC « sans alerte » ne portent que l'alerte de date de création", [short(t, 90) for t in date_lines])
     check(r.returncode == 0, "F11 code de sortie 0", r.returncode)
-    check(C.tree(C.REPO) == repo_before and C.tree(home) == home_before and not os.listdir(tmp),
-          "F11 rien touché hors de son dossier temporaire, qui a disparu", os.listdir(tmp))
+    moved = C.changed(repo_before, C.tree(C.REPO)) + C.changed(home_before, C.tree(home)) + os.listdir(tmp)
+    check(not moved, "F11 rien touché hors de son dossier temporaire, qui a disparu", moved)
 
     copy = os.path.join(base, "copie")
     shutil.copytree(C.REPO, copy, ignore=shutil.ignore_patterns(".git", "__pycache__"))

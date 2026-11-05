@@ -31,8 +31,8 @@ def main():
     got = [(l[:7].strip(), l[7:]) for l in lines]
     ok = len(got) == len(EXPECTED) and all(s == es and t.startswith(et) for (s, t), (es, et) in zip(got, EXPECTED))
     check(ok, "section 6 preuves-mac.sh : une ligne par preuve et par geste [Mac], dans l'ordre du SPEC", [short(l, 80) for l in lines if not l.startswith(("OK", "SAUTÉ", "GESTE"))] or len(got))
-    check(C.tree(C.REPO) == repo_before and C.tree(home) == {} and not os.listdir(tmp), "section 6 preuves-mac.sh : HOME et dépôt inchangés, rien ne reste",
-          os.listdir(tmp))
+    moved = C.changed(repo_before, C.tree(C.REPO)) + C.changed({}, C.tree(home)) + os.listdir(tmp)
+    check(not moved, "section 6 preuves-mac.sh : HOME et dépôt inchangés, rien ne reste", moved)
     check(trace and all(t["launcher"] != t["scenario"] for t in trace), "section 6 signaux envoyés à un groupe de processus propre au scénario", trace)
     source = open(os.path.join(C.REPO, "tests", "preuves_mac.py")).read() + open(os.path.join(C.REPO, "preuves-mac.sh")).read()
     check(not re.search(r"\bsetsid\b", source), "section 6 aucun appel à setsid (absent de macOS)")

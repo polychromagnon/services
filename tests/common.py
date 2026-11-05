@@ -77,6 +77,11 @@ def tree(root):
     return out
 
 
+def changed(before, after):
+    """Paths that appeared, vanished or changed between two tree() snapshots."""
+    return sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+
+
 def sha(path):
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
