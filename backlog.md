@@ -9,3 +9,4 @@
 - [refoulé par trust] Rotation : tenir une seconde interruption pendant la remise depuis la copie de sécurité (deux signaux de suite) — hors intention du cycle : soupape de trust, cause revenue trois fois, à toi de dire.
 - [refoulé par trust] Créer un PDF : variante « créer et alerter » pour un JPEG tronqué (ligne « semble coupé » dans l'alerte) — hors intention du cycle : règle nouvelle.
 - [refoulé par trust] Rotation : après un arrêt au milieu d'un lot, afficher les PDF déjà tournés (bilan partiel), pour qu'une relance ne les tourne pas deux fois — hors intention du cycle : soupape de trust, même cause revenue.
+- [refoulé par trust] Créer un PDF : écrire le décalage horaire d'une date d'avant 1911 en heure de Paris sous une forme PDF valide (`+00'09'` au lieu de `+00'0921'`) — hors intention du cycle : aucun usage réel connu.
