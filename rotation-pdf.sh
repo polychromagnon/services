@@ -28,6 +28,11 @@ current_lock=""
 # ou un fichier est reste dans un etat douteux et ou le dossier de verrou
 # contient les copies qui permettent de le recuperer a la main.
 keep_lock=0
+# Fichier en cours de reecriture en place, avec sa copie de securite et sa date
+# de creation d'avant : vides hors de l'etape 4 de process_pdf_locked.
+rewriting=""
+rewrite_backup=""
+rewrite_birth=""
 
 # Filet : rendre le verrou si le script s'arrete au milieu (fermeture de session,
 # Automator qui coupe l'action, Ctrl-C). Ce n'est PAS une reprise automatique
@@ -40,8 +45,25 @@ cleanup_on_exit() {
     rm -rf -- "$current_lock"
   fi
 }
+
+# Arret pendant la reecriture en place : le fichier peut etre a moitie ecrit. On
+# remet l'original depuis la copie de securite ; si cela echoue, le verrou, qui
+# contient la copie, est garde. Les signaux sont rendus a leur effet normal d'abord :
+# un second arret pendant la remise laisse lui aussi le verrou et sa copie.
+on_signal() {
+  trap - EXIT INT TERM HUP
+  if [ -n "$rewriting" ]; then
+    if cat -- "$rewrite_backup" > "$rewriting" 2>/dev/null && cmp -s -- "$rewrite_backup" "$rewriting"; then
+      put_dates_back "$rewriting" "$rewrite_backup" "$rewrite_birth"
+    else
+      keep_lock=1
+    fi
+  fi
+  cleanup_on_exit
+  exit 130
+}
 trap cleanup_on_exit EXIT
-trap 'trap - EXIT; cleanup_on_exit; exit 130' INT TERM HUP
+trap on_signal INT TERM HUP
 
 # Filet de derniere chance pour la date de creation. Avec l'ecriture en place
 # (cf. process_pdf_locked) le fichier garde son inode, donc sa date de creation
@@ -60,6 +82,21 @@ on run argv
   if theResult as boolean is false then error "restore failed"
 end run
 APPLESCRIPT
+}
+
+# Rend a un fichier les dates de sa reference (modification par touch -r), puis
+# sa date de creation d'avant si elle a bouge : abaisser la date de modification
+# sous la date de creation entraine celle-ci avec elle.
+put_dates_back() {
+  local target="$1" reference="$2" birth="$3" now
+  touch -r "$reference" -- "$target" 2>/dev/null
+  now=$(stat -L -f %B -- "$target" 2>/dev/null)
+  if [ "$now" != "$birth" ]; then
+    case "$birth" in
+      ''|*[!0-9]*|0) : ;;
+      *) restore_creation_date "$target" "$birth" ;;
+    esac
+  fi
 }
 
 # Deux invocations lancees en meme temps sur le MEME fichier (double clic, clic
@@ -162,7 +199,13 @@ process_pdf() {
 
   local lockdir="${pdf}${LOCK_SUFFIX}"
   if ! acquire_lock "$lockdir"; then
-    failures+=("$name : une autre rotation semble deja en cours sur ce fichier (si ce message persiste sans raison, supprimez le dossier ${name}${LOCK_SUFFIX} a cote du fichier)")
+    if [ -f "$lockdir/copie-de-securite.pdf" ]; then
+      # Rotation interrompue pendant la reecriture : le dossier garde peut-etre la
+      # seule copie intacte. Jamais de conseil de suppression sans l'etape de remise.
+      failures+=("$name : une autre rotation semble deja en cours sur ce fichier, ou une rotation a ete interrompue. Le dossier ${name}${LOCK_SUFFIX} a cote de lui garde l'original sous le nom copie-de-securite.pdf : si le PDF ne s'ouvre pas normalement, remettez copie-de-securite.pdf a sa place ; ensuite seulement, supprimez ce dossier.")
+    else
+      failures+=("$name : une autre rotation semble deja en cours sur ce fichier (si ce message persiste sans raison, supprimez le dossier ${name}${LOCK_SUFFIX} a cote du fichier)")
+    fi
     return
   fi
   current_lock="$lockdir"
@@ -235,7 +278,9 @@ process_pdf_locked() {
   # 2. Sauvegarde de l'original, avant la moindre ecriture. C'est le filet de
   #    l'etape 4 : si la reecriture en place casse au milieu, c'est cette copie
   #    qui remet le fichier d'aplomb.
-  if ! cp -p -- "$pdf" "$backup" 2>>"$errfile"; then
+  #    Ecrite sous un nom provisoire puis renommee une fois complete : apres un
+  #    arret brutal, un fichier nomme copie-de-securite.pdf est toujours entier.
+  if ! { cp -p -- "$pdf" "$lockdir/copie-en-cours" && mv -- "$lockdir/copie-en-cours" "$backup"; } 2>>"$errfile"; then
     failures+=("$name : impossible de preparer la copie de securite, rien n'a ete modifie")
     return
   fi
@@ -245,17 +290,22 @@ process_pdf_locked() {
   #    de modification, la seule que l'inode ne protege pas).
   touch -r "$pdf" -- "$rotated" 2>/dev/null
 
-  # 4. Reecriture du contenu A L'INTERIEUR du fichier d'origine.
+  # 4. Reecriture du contenu A L'INTERIEUR du fichier d'origine. Un arret pendant
+  #    cette etape et la suivante remet l'original (cf. on_signal).
+  rewriting="$pdf" rewrite_backup="$backup" rewrite_birth="$birth_before"
   if ! cat -- "$rotated" > "$pdf" 2>>"$errfile"; then
-    restore_from_backup "$pdf" "$name" "$backup" "$lockdir" "ecriture impossible (disque plein ?)"
+    restore_from_backup "$pdf" "$name" "$backup" "$lockdir" "ecriture impossible (disque plein ?)" "$birth_before"
+    rewriting=""
     return
   fi
 
   # 5. Verification octet par octet de ce qui a reellement ete ecrit.
   if ! cmp -s -- "$rotated" "$pdf"; then
-    restore_from_backup "$pdf" "$name" "$backup" "$lockdir" "le fichier ecrit ne correspond pas a la version tournee"
+    restore_from_backup "$pdf" "$name" "$backup" "$lockdir" "le fichier ecrit ne correspond pas a la version tournee" "$birth_before"
+    rewriting=""
     return
   fi
+  rewriting=""
 
   # 6. Dates rendues a l'identique, puis controle de la date de creation.
   touch -r "$rotated" -- "$pdf" 2>/dev/null
@@ -285,10 +335,10 @@ process_pdf_locked() {
 # remise en etat elle-meme echoue, le verrou est CONSERVE : il contient la copie
 # de securite et la version tournee, et le message dit ou les trouver.
 restore_from_backup() {
-  local pdf="$1" name="$2" backup="$3" lockdir="$4" reason="$5"
+  local pdf="$1" name="$2" backup="$3" lockdir="$4" reason="$5" birth="$6"
 
   if cat -- "$backup" > "$pdf" 2>/dev/null && cmp -s -- "$backup" "$pdf"; then
-    touch -r "$backup" -- "$pdf" 2>/dev/null
+    put_dates_back "$pdf" "$backup" "$birth"
     failures+=("$name : $reason ; le fichier a ete remis a l'identique, aucune donnee perdue")
     return
   fi
