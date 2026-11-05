@@ -32,9 +32,11 @@ done
 
 # True when git already stores the exact content of every file of folder $1.
 saved_in_git() {
-  local f
+  local f h
   while IFS= read -r -d '' f; do
-    git -C "$SCRIPTS" cat-file -e "$(git hash-object -- "$f")" 2>/dev/null || return 1
+    h=$(git hash-object -- "$f")
+    # services has its own repo since 2026-11-05; older contents stay in the scripts repo
+    git -C "$HERE" cat-file -e "$h" 2>/dev/null || git -C "$SCRIPTS" cat-file -e "$h" 2>/dev/null || return 1
   done < <(find "$1" -type f ! -name .DS_Store -print0)
 }
 
