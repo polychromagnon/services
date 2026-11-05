@@ -457,6 +457,8 @@ def claim(folder, stem, final):
             break
         except FileExistsError:
             n += 1
+        except OSError:
+            refuse(f"Impossible d'écrire dans « {folder} » (dossier protégé ou disque en lecture seule).")
     try:
         with out, open(final, "rb") as src:
             shutil.copyfileobj(src, out)
@@ -517,7 +519,9 @@ def run(files, work):
     # neither a second launch nor an interruption can leave a partial file under a final name.
     folder = os.path.dirname(files[0])
     stem = os.path.splitext(os.path.basename(files[0]))[0]
-    temp = os.path.join(folder, f"{stem} (PDF en cours {os.getpid()})")
+    tail = f" (PDF en cours {os.getpid()})"
+    room = 255 - len(tail.encode())  # a file name holds 255 bytes: shorten the stem, not the marker
+    temp = os.path.join(folder, stem.encode()[:room].decode(errors="ignore") + tail)
     try:
         out = open(temp, "xb")
     except OSError:
