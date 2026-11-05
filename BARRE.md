@@ -54,9 +54,9 @@
 
 > Écrit par le dernier run, verdict en première ligne. Le détail des preuves vit dans `dossier/proof.md` ; ici, seulement ce qui t'oriente.
 
-**Verdict : —**
+**Verdict : SPEC prêt** — intention non validée par un humain, essaie le produit pour vérifier qu'il fait ce que tu voulais. Relecture du SPEC : plafond de 12 attaques atteint sans deux attaques propres consécutives (n'a pas convergé : chaque attaque trouvait des preuves plus fines à durcir), et le SPEC a changé après sa dernière attaque.
 
-- Fait : …
-- Reste : …
-- Bloqué : …
-- En attente de ton feu vert : …
+- Fait : `SPEC.md` (le comportement que tu as décidé, avec une preuve qui peut échouer pour chaque promesse), recherche d'existant (rien qui fasse déjà ça), 12 relectures adverses.
+- Reste : ship (tests, corrections listées en section 4, preuves), puis send.
+- Bloqué : rien.
+- En attente de ton feu vert : rien pour l'instant ; les lignes OUVERT et les décisions de la section 4 sont à relire quand tu veux.
