@@ -162,5 +162,8 @@ Ce dépôt est la seule source des actions rapides du Finder de Michael (clic dr
 
 ## 7. Ce que je fournis
 
+- **Greffe sur l'existant** (recherche d'existant du 2026-11-05) : aucun outil maintenu ne fait ensemble l'assemblage sans perte avec contrôle d'identité, la reprise des dates et les alertes, ni la rotation en place qui garde l'inode ; le projet se greffe déjà sur les briques maintenues qpdf, img2pdf, Pillow, pikepdf, exiftool, mozjpeg et `sips`, et le « Créer un PDF » natif du Finder donne la référence pour l'ordre des clics et le nom. Le delta construit ici est le reste (F1 à F16).
+> à vérifier — recherche faite par extraits : support.apple.com et formulae.brew.sh ne se lisent pas depuis la VM ; le comportement réel du « Créer un PDF » natif (recompression, dates) n'est établi par aucune page Apple.
+
 - **Corpus protégé** : la photo réelle `test-HEIC/img.heic`, dans le dossier parent du dépôt sur le Mac (`~/Developer/scripts/test-HEIC/img.heic`), hors de ce dépôt ; à ne jamais supprimer ni remplacer (Michael 2026-10-27). Elle n'est pas dans la VM : les preuves qui en dépendent sont `[Mac]`.
 > à vérifier — chemin déduit de `test-creer-pdf.sh` (`../test-HEIC/img.heic` relatif au dossier du script).
