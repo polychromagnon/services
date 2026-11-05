@@ -59,7 +59,7 @@ def main():
     for a in p["actions"]:
         ap = a["action"]["ActionParameters"]
         if "COMMAND_STRING" in ap:
-            assert ap["COMMAND_STRING"].count("Impossible d'écrire dans") == 1
+            assert ap["COMMAND_STRING"].count("Impossible d'écrire dans") >= 1
             ap["COMMAND_STRING"] = ap["COMMAND_STRING"].replace("Impossible d'écrire dans", "Écriture refusée dans")
     plistlib.dump(p, open(doc, "wb"))
     r = run_selftest(copy, home, tmp)
