@@ -202,7 +202,7 @@ process_pdf() {
     if [ -f "$lockdir/copie-de-securite.pdf" ]; then
       # Rotation interrompue pendant la reecriture : le dossier garde peut-etre la
       # seule copie intacte. Jamais de conseil de suppression sans l'etape de remise.
-      failures+=("$name : une autre rotation semble deja en cours sur ce fichier, ou une rotation a ete interrompue. Le dossier ${name}${LOCK_SUFFIX} a cote de lui garde l'original sous le nom copie-de-securite.pdf : si le PDF ne s'ouvre pas normalement, remettez copie-de-securite.pdf a sa place ; ensuite seulement, supprimez ce dossier.")
+      failures+=("$name : une autre rotation semble deja en cours sur ce fichier, ou une rotation a ete interrompue. Le dossier ${name}${LOCK_SUFFIX} a cote de lui garde l'original sous le nom copie-de-securite.pdf : si le PDF ne s'ouvre pas normalement, remettez copie-de-securite.pdf a sa place. Attention : un PDF coupe en cours d'ecriture peut s'ouvrir avec des pages vides ou manquantes ; dans le doute, remettez la copie (au pire, la rotation est annulee). Ensuite seulement, supprimez ce dossier.")
     else
       failures+=("$name : une autre rotation semble deja en cours sur ce fichier (si ce message persiste sans raison, supprimez le dossier ${name}${LOCK_SUFFIX} a cote du fichier)")
     fi
