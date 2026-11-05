@@ -26,7 +26,6 @@ def run(repo, base):
 
 def main():
     base = C.scratch("preuves-")
-    home_before = None
     repo_before = C.tree(C.REPO)
     r, lines, trace, home, tmp = run(C.REPO, base)
     got = [(l[:7].strip(), l[7:]) for l in lines]

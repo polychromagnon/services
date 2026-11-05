@@ -317,8 +317,7 @@ process_pdf_locked() {
     # sauf si la date lue est nulle ou absurde — la reappliquer telle quelle
     # daterait le fichier du 1er janvier 1970.
     case "$birth_before" in
-      ''|*[!0-9]*) : ;;
-      0) : ;;
+      ''|*[!0-9]*|0) : ;;
       *) restore_creation_date "$pdf" "$birth_before" ;;
     esac
     birth_after=$(stat -L -f %B -- "$pdf" 2>/dev/null)

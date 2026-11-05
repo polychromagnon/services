@@ -1,5 +1,5 @@
 """Rotation gauche and Rotation droite: F12 of the SPEC, on rotation-pdf.sh and both workflows."""
-import json, os, re, shutil, signal, subprocess, time
+import json, os, shutil, signal, subprocess, time
 import pikepdf
 import common as C
 from common import check, short
@@ -293,7 +293,6 @@ def content_kept(R):
     xo.Type, xo.Subtype, xo.Width, xo.Height = pikepdf.Name.XObject, pikepdf.Name.Image, 20, 10
     xo.ColorSpace, xo.BitsPerComponent, xo.Filter = pikepdf.Name.DeviceRGB, 8, pikepdf.Name.LZWDecode
     import io
-    from PIL import Image
     buf = io.BytesIO()
     C.pattern(40, 20).save(buf, "JPEG", quality=90)
     jp = pikepdf.Stream(pdf, buf.getvalue())

@@ -21,7 +21,7 @@ EOF
 chmod +x "$T/bin/osascript"
 "$PY" -I - "$T" "$HERE" <<'PY'
 import hashlib, io, os, re, shutil, struct, subprocess, sys, time, zlib
-from datetime import datetime, timezone
+from datetime import datetime
 import img2pdf, pikepdf, PIL
 from PIL import Image, ImageCms, ImageOps
 

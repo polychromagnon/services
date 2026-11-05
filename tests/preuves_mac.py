@@ -320,7 +320,7 @@ def icloud():
     try:
         C.make_pdf(f"{d}/a.pdf", ["A", "B"])
         c = C.Creer(os.path.join(WORK, "creer-icloud"))
-        r = c.run(f"{d}/a.pdf")
+        c.run(f"{d}/a.pdf")
         time.sleep(5)
         names = sorted(os.listdir(d))
         ok = names == ["a 2.pdf", "a.pdf"]

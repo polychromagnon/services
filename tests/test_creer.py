@@ -1,6 +1,6 @@
 """Créer un PDF: F1 to F10 and sections 3 to 5 of the SPEC, on the action's real script."""
-import json, os, re, shutil, signal, struct, subprocess, sys, threading, time, zlib
-from PIL import Image, ImageChops, ImageOps, ImageStat
+import json, os, re, shutil, signal, struct, subprocess, sys, time, zlib
+from PIL import Image, ImageOps
 import logging
 import img2pdf, pikepdf
 import common as C
@@ -132,11 +132,6 @@ def sampling(jpeg):
     return []
 
 
-def psnr(a, b):
-    mse = sum(v * v for v in ImageStat.Stat(ImageChops.difference(a, b)).rms) / len(a.getbands())
-    return 99 if not mse else 10 * __import__("math").log10(255 ** 2 / mse)
-
-
 def display_inches(path, frame=0):
     """Displayed width and height in inches: dots over density, density turning with the image."""
     im = Image.open(path)
@@ -209,7 +204,7 @@ def xref_stream_empty(path):
     pred = re.search(rb"/Predictor (\d+)", head)
     row = sum(w)
     if pred and int(pred[1]) >= 10:
-        rows, prev, out = [], bytearray(row), bytearray()
+        prev, out = bytearray(row), bytearray()
         for i in range(0, len(data), row + 1):
             ft, line = data[i], bytearray(data[i + 1:i + 1 + row])
             if ft == 2:

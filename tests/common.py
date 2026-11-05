@@ -1,6 +1,6 @@
 """Shared helpers of the VM suite: extracting the actions' real scripts, stand-ins for macOS
 tools, running an action, building test files. Every check prints one OK or ÉCHEC line."""
-import hashlib, io, json, os, plistlib, re, shutil, stat, struct, subprocess, sys, tempfile, time, zlib
+import hashlib, json, os, plistlib, subprocess, tempfile, time, zlib
 from datetime import datetime
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
