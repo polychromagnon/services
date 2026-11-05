@@ -10,6 +10,7 @@
 #     also catches the old copy of a renamed action; nothing is lost, git keeps it;
 #   - a link of the same name pointing elsewhere is replaced;
 #   - a real copy of the same name that git does not hold is left alone and reported.
+#   - the Claude app's three actions (Claude - ask/codeHere/send) are never touched.
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -44,6 +45,10 @@ mkdir -p "$LIB"
 
 # Duplicates: links left behind by a renamed or moved action, and real copies git holds.
 for dst in "$LIB"/*.workflow; do
+  case "$(basename -- "$dst")" in
+    # The Claude app's own actions stay out, whatever git knows of their files.
+    "Claude - ask.workflow"|"Claude - codeHere.workflow"|"Claude - send.workflow") continue ;;
+  esac
   if [ -L "$dst" ]; then
     target=$(readlink "$dst")
     case "$target" in
