@@ -25,6 +25,12 @@
 
 > Une décision par ligne : qui la pose, la question, la proposition de l'équipage, puis la flèche où tu réponds (un mot suffit : oui, non, un chiffre, un choix). Le prochain run lit ta réponse, l'applique, retire la ligne, et grave en section 1 ce qui mérite de durer. **Section vide : rien ne t'attend.** Tant qu'une ligne reste sans réponse, le SPEC n'est pas figé et rien ne part en production.
 
+- [ship, relecture du code] Rotation interrompue brutalement (coupure, arrêt forcé) : le PDF peut rester coupé mais s'ouvrir quand même, pages vides ou manquantes. Le message te dit de remettre la copie de sécurité « si le PDF ne s'ouvre pas normalement », et j'ai ajouté « dans le doute, remettez la copie ». Faut-il dire de remettre la copie dans tous les cas ? Proposition : oui, au pire la rotation est annulée, jamais l'original perdu. →
+- [ship, relecture du code] Noms de fichier très longs (plus de 236 caractères environ) : la rotation refuse avec un message faux (« une autre rotation semble déjà en cours »), et Créer un PDF refuse avec « Impossible d'écrire » quand le nom final dépasse la limite ; aucun fichier n'est abîmé. Faut-il un message juste (« nom trop long, raccourcis-le ») ? Proposition : oui. →
+- [ship, relecture du code] Rotation d'un PDF signé électroniquement : la signature ne vaut plus après rotation, sans alerte, alors que Créer un PDF t'alerte dans ce cas. Faut-il refuser la rotation avec « signé : garde l'original » ? Proposition : oui (déjà au backlog). →
+- [ship, relecture du code] Après un arrêt forcé de Créer un PDF, un fichier « … (PDF en cours N) » reste dans le dossier, sans que rien ne te le signale. Faut-il qu'un lancement suivant le signale (sans le supprimer) ? Proposition : oui. →
+- [ship, relecture du code] Très gros lots (scans TIFF de centaines de pages) : aucun budget de temps ni de mémoire n'est fixé ni testé. Faut-il en fixer un ? Proposition : non, tu le diras si un cas te gêne. →
+- [ship, relecture du code] La preuve iCloud de `preuves-mac.sh` vérifie maintenant que ton dossier Documents est synchronisé, et sinon dit « preuve non exercée » au lieu d'un faux OK. Ça te va ? Proposition : oui. →
 
 ## 4. Décidé sans toi — à revoir
 
