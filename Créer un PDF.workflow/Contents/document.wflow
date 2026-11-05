@@ -240,15 +240,24 @@ def displayed(x, rot):
     return got.transpose(turn[rot]) if rot else got
 
 
+def turn_of(frame):
+    """EXIF orientation of the current frame (1 to 8)."""
+    if hasattr(frame, "tag_v2"):
+        with Image.open(frame.filename) as fresh:  # loading drops the turn tag: read it unloaded
+            fresh.seek(frame.tell())
+            return fresh.tag_v2.get(274, 1)
+    return frame.getexif().get(274, 1)
+
+
 def upright(frame):
     """The frame as the viewer must see it. Pillow 13 misreads an uncompressed TIFF that
     carries a turn (stripes at the announced size): its size is checked against the file."""
     up = ImageOps.exif_transpose(frame)
     if hasattr(frame, "tag_v2"):
-        with Image.open(frame.filename) as fresh:  # loading drops the turn tag: read it unloaded
+        with Image.open(frame.filename) as fresh:
             fresh.seek(frame.tell())
-            w, h, turn = fresh.tag_v2.get(256), fresh.tag_v2.get(257), fresh.tag_v2.get(274, 1)
-        if up.size != ((h, w) if turn in (5, 6, 7, 8) else (w, h)):
+            w, h = fresh.tag_v2.get(256), fresh.tag_v2.get(257)
+        if up.size != ((h, w) if turn_of(frame) in (5, 6, 7, 8) else (w, h)):
             raise ValueError("TIFF mal lu par Pillow")
     return up
 
@@ -369,6 +378,8 @@ def add_image(path, name, k, i, work):
             if fr.mode not in ("1", "L", "LA", "RGB", "RGBA"):
                 raise ValueError(fr.mode)  # CMYK, 32-bit...: no lossless PNG for them
             keep = {key: im.info[key] for key in ("icc_profile", "dpi") if im.info.get(key)}
+            if "dpi" in keep and turn_of(im) in (5, 6, 7, 8):
+                keep["dpi"] = keep["dpi"][::-1]  # the dots turn with the picture: a fax stays unsquashed
             pngs.append(os.path.join(work, f"{i}-{j}.png"))
             fr.save(pngs[-1], **keep)
         pdf = img2pdf.convert(pngs, rotation=img2pdf.Rotation.none, layout_fun=a4_wide(False))
