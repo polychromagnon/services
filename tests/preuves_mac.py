@@ -315,8 +315,21 @@ def f15_services():
     return len(ocr) == 1 and len(meta) == 1, f"OCR {ocr}, métadonnées {meta}"
 
 
+def icloud_synced(path):
+    """Whether iCloud Drive manages this folder (Desktop & Documents sync). Unverified on a real
+    Mac: a path under Mobile Documents or CloudStorage, or a file-provider extended attribute."""
+    real = os.path.realpath(path)
+    if "Mobile Documents" in real or "CloudStorage" in real:
+        return True
+    attrs = subprocess.run(["xattr", path], capture_output=True, text=True).stdout
+    return "com.apple.file-provider" in attrs or "com.apple.icloud" in attrs
+
+
 def icloud():
-    d = tempfile.mkdtemp(prefix="Preuve Créer un PDF ", dir=os.path.expanduser("~/Documents"))
+    docs = os.path.expanduser("~/Documents")
+    if not icloud_synced(docs):
+        return False, "Documents ne semble pas synchronisé par iCloud Drive : preuve non exercée"
+    d = tempfile.mkdtemp(prefix="Preuve Créer un PDF ", dir=docs)
     try:
         C.make_pdf(f"{d}/a.pdf", ["A", "B"])
         c = C.Creer(os.path.join(WORK, "creer-icloud"))
@@ -333,6 +346,7 @@ def icloud():
 
 
 def main():
+    os.dup2(os.open(os.devnull, os.O_RDONLY), 0)  # a stand-in that reads stdin must never wait on ours
     print(f"INFO   preuves Mac, {'macOS' if MAC else sys.platform} ; dossier de travail {WORK}")
     gesture("F1 ordre des clics", "dans le Finder, clique une image, puis un PDF, puis un autre PDF (Cmd-clic, dans cet ordre), "
             "puis clic droit, Créer un PDF : les pages du PDF créé suivent l'ordre de tes clics")

@@ -86,6 +86,7 @@ def apply(copy, target, old, new):
 
 
 def main(argv):
+    os.dup2(os.open(os.devnull, os.O_RDONLY), 0)  # a stand-in that reads stdin must never wait on ours
     picks = [int(a) for a in argv] or range(1, len(MUTATIONS) + 1)
     caught = total = 0
     for n in picks:

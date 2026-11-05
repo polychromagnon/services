@@ -238,7 +238,8 @@ def main():
     shutil.copy(f"{d}/v.pdf", f"{d}/v.pdf.rotation-pdf-lock/copie-de-securite.pdf")
     o = R.run("+90", f"{d}/v.pdf")
     t = o.text
-    check("copie-de-securite.pdf" in t and "ne s'ouvre pas normalement" in t and t.find("ne s'ouvre pas") < t.find("supprimez"),
+    check("copie-de-securite.pdf" in t and "ne s'ouvre pas normalement" in t and "dans le doute, remettez la copie" in t
+          and t.find("ne s'ouvre pas") < t.find("supprimez"),
           "F12 verrou qui garde la copie : la nomme, remise avant toute suppression", short(t))
 
     d = R.folder()

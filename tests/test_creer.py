@@ -10,6 +10,7 @@ PY = sys.executable
 logging.disable(logging.WARNING)  # img2pdf's notes, when the test calls it as the action does
 runs = []          # every Result, for the one-alert and originals checks
 touched = []       # originals changed by an action
+unsized = []       # image pages of F3 and F4 that break the F5 page-size rule
 leftovers = []     # work folders left in the action's TMPDIR
 
 
@@ -49,6 +50,19 @@ class Bench:
                 shutil.rmtree(os.path.join(self.tmp, n), ignore_errors=True)
         runs.append(r)
         return r
+
+
+def measure(r, pages):
+    """F5 on a result: each page sized from its (source, frame), in order."""
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    if not r.new:
+        return
+    with pikepdf.open(r.new[0]) as pdf:
+        for pg, (src, frame) in zip(pdf.pages, pages):
+            good, txt = C.a4_rule(pg, *display_inches(src, frame))
+            if not good:
+                unsized.append(f"{os.path.basename(src)}:{txt}")
 
 
 def pdf_pages(path):
@@ -346,6 +360,7 @@ def main():
     os.rename(f"{d}/mpo.mpo", f"{d}/stereo.jpg")
     src = open(f"{d}/stereo.jpg", "rb").read()
     r = b.run(f"{d}/stereo.jpg")
+    measure(r, [(f"{d}/stereo.jpg", 0)])
     ok = False
     if r.new:
         with pdf_pages(r.new[0]) as o:
@@ -357,6 +372,7 @@ def main():
     full = open(f"{d}/full.jpg", "rb").read()
     open(f"{d}/coupe.jpg", "wb").write(full[:int(len(full) * 0.6)])
     r = b.run(f"{d}/coupe.jpg")
+    measure(r, [(f"{d}/full.jpg", 0)])
     ok = False
     if r.new:
         with pdf_pages(r.new[0]) as o:
@@ -364,6 +380,7 @@ def main():
     check(ok and r.quiet(), "F3 JPEG tronqué : recopié tel quel, sans alerte", short(r.text))
     turned.save(f"{d}/couche.jpg", quality=92, exif=C.exif(6), icc_profile=srgb)
     r = b.run(f"{d}/couche.jpg")
+    measure(r, [(f"{d}/couche.jpg", 0)])
     ok = False
     if r.new:
         with pdf_pages(r.new[0]) as o:
@@ -373,6 +390,7 @@ def main():
     rgba = C.pattern(mode="RGBA")
     rgba.save(f"{d}/rgba.png")
     r = b.run(f"{d}/rgba.png")
+    measure(r, [(f"{d}/rgba.png", 0)])
     ok = False
     if r.new:
         with pdf_pages(r.new[0]) as o:
@@ -383,6 +401,7 @@ def main():
                        ("p3.webp", lambda p: up.save(p, lossless=True, icc_profile=p3))):
         save(f"{d}/{name}")
         r = b.run(f"{d}/{name}")
+        measure(r, [(f"{d}/{name}", 0)])
         ok = False
         if r.new:
             with pdf_pages(r.new[0]) as o:
@@ -418,6 +437,7 @@ def main():
     up.save(f"{w}/deux.tiff", save_all=True, append_images=[bw])
     up.save(f"{w}/image.bmp")
     r = b.run(f"{w}/deux.tiff", f"{w}/image.bmp")
+    measure(r, [(f"{w}/deux.tiff", 0), (f"{w}/deux.tiff", 1), (f"{w}/image.bmp", 0)])
     ok = False
     if r.new:
         with pdf_pages(r.new[0]) as o:
@@ -428,6 +448,7 @@ def main():
     for ctype, lab in ((2, "RGB"), (0, "gris")):
         data = png16(f"{w}/deep{ctype}.png", ctype)
         r = b.run(f"{w}/deep{ctype}.png")
+        measure(r, [(f"{w}/deep{ctype}.png", 0)])
         ok = False
         if r.new:
             with pdf_pages(r.new[0]) as o:
@@ -441,6 +462,7 @@ def main():
     for name, via in (("x.dng", True), ("y.tif", True), ("z.tif", False)):
         open(b.sips_log, "w").close()
         r = b.run(f"{w}/{name}")
+        measure(r, [(f"{w}/{name}", 0)])
         called = name in open(b.sips_log).read()
         ok = False
         if r.new:
@@ -456,6 +478,7 @@ def main():
     photo = Image.blend(photo, C.pattern(600, 400), 0.7)
     C.heic(f"{h}/photo.heic", photo, icc_profile=p3, quality=90)
     r = b.run(f"{h}/photo.heic")
+    measure(r, [(f"{h}/photo.heic", 0)])
     ok = False
     stream1 = None
     if r.new:
@@ -483,6 +506,7 @@ def main():
     alpha = C.pattern(120, 80, "RGBA")
     C.heic(f"{h}/alpha.heic", alpha)
     r = b.run(f"{h}/alpha.heic")
+    measure(r, [(f"{h}/alpha.heic", 0)])
     ok = False
     if r.new:
         subprocess.run(["/usr/bin/sips", "-s", "format", "png", f"{h}/alpha.heic", "--out", f"{h}/alpha.png"], capture_output=True)
@@ -494,6 +518,7 @@ def main():
     opaque.putalpha(255)
     C.heic(f"{h}/opaque.heic", opaque)
     r = b.run(f"{h}/opaque.heic")
+    measure(r, [(f"{h}/opaque.heic", 0)])
     ok = False
     if r.new:
         with pdf_pages(r.new[0]) as o:
@@ -537,6 +562,7 @@ for _ in range(40):
     Image.blend(Image.effect_noise((300, 200), 30).convert("RGB"), C.pattern(300, 200), 0.6).save(f"{h}/photo.avif")
     open(b.sips_log, "w").close()
     r = b.run(f"{h}/photo.avif")
+    measure(r, [(f"{h}/photo.avif", 0)])
     ok = False
     if r.new:
         with pdf_pages(r.new[0]) as o:
@@ -544,6 +570,7 @@ for _ in range(40):
     check(ok and "photo.avif" in open(b.sips_log).read() and r.quiet(), "F4 AVIF : passé à sips, JPEG, sans alerte", short(r.text))
     C.heic(f"{h}/big.heic", Image.effect_noise((4032, 3024), 40).convert("RGB"), quality=90)
     r = b.run(f"{h}/big.heic")
+    measure(r, [(f"{h}/big.heic", 0)])
     ok = False
     if r.new:
         with pdf_pages(r.new[0]) as o:
@@ -845,6 +872,11 @@ for _ in range(40):
     C.make_pdf(f"{e}/é'\"\\ y.pdf")
     r = b.run(f"{e}/é'\"\\ y.pdf")
     check(r.names == ["é'\"\\ y 2.pdf"], "section 5 nom exotique de PDF : « … y 2.pdf »", r.names)
+    long_stem = "n" * 245
+    up.save(f"{e}/{long_stem}.png")
+    r = b.run(f"{e}/{long_stem}.png")
+    check(r.names == [f"{long_stem}.pdf"] and not any("(PDF en cours" in n for n in os.listdir(e)),
+          "section 5 nom de 245 caractères : PDF créé sous son nom, aucun provisoire", short(r.text) or r.names)
     weird = C.write_exec(os.path.join(b.base, "exiftool-1"), "#!/bin/sh\necho '[1]'\n")
     rw = b.variant("ex1", {"/opt/homebrew/bin/exiftool": weird})
     r = b.run(f"{f7}/a.pdf", runner=rw)
@@ -866,6 +898,7 @@ for _ in range(40):
     check(not many, "F8 une seule alerte par lancement", many[:2])
     check(not touched, "section 3 originaux jamais touchés (contenu et date de modification)", touched)
     check(not leftovers, "section 5 dossier de travail nettoyé après chaque lancement", leftovers[:2])
+    check(not unsized, "F5 pages image des preuves F3 et F4 : largeur A4 dans leur sens, proportions affichées", unsized[:4])
 
 
 def disk_full(b, up):

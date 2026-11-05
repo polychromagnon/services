@@ -50,6 +50,7 @@ def preconditions():
 
 
 def main(argv):
+    os.dup2(os.open(os.devnull, os.O_RDONLY), 0)  # a stand-in that reads stdin must never wait on ours
     only_pre = "--preconditions-only" in argv
     names = [a for a in argv if not a.startswith("--")] or MODULES
     preconditions()
